@@ -43,9 +43,22 @@ tasks:
       - "{{.IN_BOX}} bash -c 'cd {{.LADYBIRD_DIR}} && flatpak-builder --disable-rofiles-fuse --install-deps-from=flathub --user --install --force-clean --ccache build {{.MANIFEST_PATH}}'"
 
   run:
-    desc: Run the installed flatpak (host flatpak sees it too, since the distrobox shares ~/.local/share/flatpak)
+    desc: >
+      Run the installed flatpak (host flatpak sees it too, since the distrobox shares
+      ~/.local/share/flatpak). --disable-sandbox works around a live, unreported upstream
+      Landlock crash -- see README.md. If a crashed session left a stale single-instance
+      lock, this will fail with "connect: Connection refused"; run `task clean-runtime`.
     cmds:
-      - flatpak run {{.APP_ID}}
+      - flatpak run {{.APP_ID}} --disable-sandbox
+
+  clean-runtime:
+    desc: Remove a stale single-instance lock/socket left by a crashed session
+    vars:
+      UID:
+        sh: id -u
+      LOCK_DIR: /run/user/{{.UID}}/.flatpak/{{.APP_ID}}/xdg-run/Ladybird/Profiles/default
+    cmds:
+      - rm -f {{.LOCK_DIR}}/*.pid {{.LOCK_DIR}}/*.socket {{.LOCK_DIR}}/*.lock
 
   clean:
     desc: Remove local build artifacts (not the ladybird checkout)

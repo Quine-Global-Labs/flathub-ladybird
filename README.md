@@ -43,10 +43,9 @@ task run              # flatpak run org.ladybird.Ladybird
 `task update` pulls the latest `ladybird/` checkout before a rebuild. `task clean`
 removes local build artifacts (not the checkout itself).
 
-**Confirmed working end to end on 2026-09-30**: `task build` compiles every dependency
-module (angle, skia, openssl, ffmpeg, etc.) and the main `Ladybird` module itself, installs
-cleanly, and `flatpak run org.ladybird.Ladybird` launches with no errors. Two things worth
-knowing if you hit them:
+**Build confirmed working end to end on 2026-09-30**: `task build` compiles every
+dependency module (angle, skia, openssl, ffmpeg, etc.) and the main `Ladybird` module
+itself, and installs cleanly. Two build-time things worth knowing if you hit them:
 
 - `flatpak-builder` needs `--install-deps-from=flathub` (already in `task build`). Without
   it, it fails immediately with `Requested extension
@@ -62,6 +61,62 @@ knowing if you hit them:
   grant for bubblewrap's per-step sandbox (it just worked), so `InsecureRootCapabilities`
   wasn't needed here — evidently distrobox containers already have sufficient namespace
   permissions by default on this host.
+
+## Running it: two live, unfixed upstream sandbox bugs
+
+The built app installs fine but currently **will not run with Linux sandboxing enabled**
+at today's pinned master commit (`124f0c9871`) — both bugs are in Ladybird's own C++
+sandbox code, not in packaging:
+
+1. **Fontconfig loads after the sandbox restricts filesystem access, so it fails** —
+   tracked upstream as
+   [#11775](https://github.com/LadybirdBrowser/ladybird/issues/11775) (open, filed
+   2026-09-15, reported against NixOS but is a general Linux-sandbox issue, not
+   Nix-specific — Flatpak's own filesystem restriction triggers the identical failure).
+   The issue includes an unmerged, untested-by-its-author patch (force fontconfig to load
+   its config before the Landlock/seccomp restrictions go up, then hand Skia that already-
+   loaded `FcConfig*` instead of letting it load a fresh one from inside the sandbox).
+   **Applied locally** (uncommitted, working-tree-only changes in `ladybird/` — the
+   manifest's `Ladybird` module sources directly from the working directory, so a rebuild
+   picks it up automatically) to `Services/Compositor/SandboxLinux.cpp`,
+   `Services/RendererSandboxLinux.cpp`, and `Libraries/LibGfx/Font/TypefaceSkia.cpp`,
+   adapted to this checkout's current `Gfx::GlobalFontConfig` singleton (a `get()` accessor
+   that didn't exist when the issue's patch was written) rather than applied as a literal
+   patch file. **Confirmed fixed**: the `Fontconfig error: Cannot load default config file`
+   line is gone from a rebuild with this change, verified against the exact same manifest
+   that reproduced it.
+
+2. **A second, separate, not-yet-reported bug**: even with the fontconfig fix applied,
+   `WebContent` crash-loops immediately on startup with `Runtime error: Landlock must be
+   applied before the process starts a second thread` — repeating every ~100ms, "Last page
+   loaded: about:newtab" each time. This was present from the very first run, *before* the
+   fontconfig patch, so it isn't caused by that fix; searched the issue tracker
+   exhaustively and found no existing report. **Confirmed isolated**: running with
+   `flatpak run org.ladybird.Ladybird --disable-sandbox` (propagates to every helper
+   process — `Services/WebContent/main.cpp`'s `--disable-sandbox` flag, plumbed through
+   `LibWebView/HelperProcess.cpp`) eliminates the crash loop entirely — `RequestServer`,
+   `Compositor`, and two `WebContent` processes all start and stay up. This isolates the
+   bug cleanly to Ladybird's own Landlock-application code path (a thread getting created
+   somewhere between `Sandbox::install_no_new_privileges()`/`configure_runtime()` and the
+   actual Landlock restrict syscall, for reasons not yet root-caused), not to Flatpak, not
+   to this repo's build, and not to the fontconfig fix. Worth filing upstream.
+
+`task run` currently needs `--disable-sandbox` appended to actually work:
+
+```
+flatpak run org.ladybird.Ladybird --disable-sandbox
+```
+
+This is a real reduction in the security boundary Ladybird's own sandbox is meant to
+provide (it's still inside the outer Flatpak sandbox, which is unaffected) — fine for
+local testing, not something to treat as a permanent fix. If a leftover session from a
+crashed run leaves the browser refusing to start at all with
+`Runtime error: connect: Connection refused (errno=111)`, a stale single-instance
+lock/socket is why — clear it and relaunch:
+
+```
+rm -f /run/user/$(id -u)/.flatpak/org.ladybird.Ladybird/xdg-run/Ladybird/Profiles/default/{*.pid,*.socket,*.lock}
+```
 
 ## Flathub submission
 
