@@ -60,10 +60,58 @@
                     "commit": "7f3781e19cc7d4e4882a4caec01668c6f7b5c163",
                     "x-comment": "Matches builtin-baseline in Ladybird's vcpkg.json at the pinned commit above. Must be re-synced whenever the Ladybird git pin above moves."
                 },
+                {
+                    "type": "file",
+                    "url": "https://github.com/microsoft/vcpkg-tool/releases/download/2026-07-27/vcpkg-glibc",
+                    "sha512": "be59d1fdf3725d2fb4bd1c0b435266726aaff2f87cb2503b775f44fb9b392ab474e6370d7e90e9d07b2c584b7deacc0670f98b477905c2e0d5cba5e01cee93dc",
+                    "dest": "vcpkg",
+                    "dest-filename": "vcpkg",
+                    "only-arches": ["x86_64"],
+                    "x-comment": "Prebuilt vcpkg-tool binary, matching VCPKG_TOOL_RELEASE_TAG/VCPKG_GLIBC_SHA in vcpkg/scripts/vcpkg-tool-metadata.txt at the pinned vcpkg commit above. vcpkg.cmake only runs bootstrap-vcpkg.sh (which needs network to fetch this exact file) if $VCPKG_ROOT/vcpkg doesn't already exist -- pre-placing it here skips that network hit entirely. Must be re-synced whenever the vcpkg git pin above moves."
+                },
+                {
+                    "type": "file",
+                    "url": "https://github.com/microsoft/vcpkg-tool/releases/download/2026-07-27/vcpkg-glibc-arm64",
+                    "sha512": "3907b4b11abafd5ee82c04721bff80a4ca865c9f1d1ed0b62eb8f43f4470f313b3f6d19779e70b37db2678a6bd0536e3c1d8d542542e75c00f80d97932a9755a",
+                    "dest": "vcpkg",
+                    "dest-filename": "vcpkg",
+                    "only-arches": ["aarch64"],
+                    "x-comment": "Same as the x86_64 vcpkg-glibc source above, for the aarch64 build (flathub.json only-arches)."
+                },
+                {
+                    "type": "shell",
+                    "commands": [
+                        "chmod +x vcpkg/vcpkg"
+                    ],
+                    "x-comment": "flatpak file sources don't preserve/set the executable bit."
+                },
+                {
+                    "type": "git",
+                    "url": "https://chromium.googlesource.com/libyuv/libyuv",
+                    "commit": "d98915a654d3564e4802a0004add46221c4e4348",
+                    "dest": "vcpkg-git-externals/libyuv",
+                    "x-comment": "Skia bundles libyuv as an external, fetched by vcpkg itself via a raw git clone (no vcpkg_download_distfile hash check). googlesource's +archive endpoint is NOT reproducible across requests (confirmed: two fetches of this exact commit produced two different sha256 hashes), so it can't be a hash-pinned flatpak 'file' source -- a hash-pinned 'git' source (by commit) plus the 'shell' source below (packing it into the .tar.gz vcpkg expects in downloads/) is used instead. Re-sync if the vcpkg git pin above moves."
+                },
+                {
+                    "type": "git",
+                    "url": "https://android.googlesource.com/platform/external/piex",
+                    "commit": "bb217acdca1cc0c16b704669dd6f91a1b509c406",
+                    "dest": "vcpkg-git-externals/piex",
+                    "x-comment": "Same situation as libyuv above: Skia's other googlesource-fetched external."
+                },
+                {
+                    "type": "shell",
+                    "commands": [
+                        "mkdir -p vcpkg/downloads",
+                        "tar czf vcpkg/downloads/libyuv-d98915a654d3564e4802a0004add46221c4e4348.tar.gz -C vcpkg-git-externals/libyuv --exclude=.git .",
+                        "tar czf vcpkg/downloads/skia-bb217acdca1cc0c16b704669dd6f91a1b509c406.tar.gz -C vcpkg-git-externals/piex --exclude=.git ."
+                    ],
+                    "x-comment": "Synthesizes the exact tarballs vcpkg's skia portfile expects to find already cached in downloads/, from the hash-pinned git checkouts above -- no network involved, so this is safe to run in the sandboxed build. UNVERIFIED against a full (non-download-only) vcpkg build: vcpkg doesn't hash-check these two specifically (no asset-cache/sha512 line for them in the install log), so content should be accepted regardless of exact tar layout, but that's inferred from log behavior, not confirmed by a successful full build yet."
+                },
                 "@@CARGO_SOURCES@@",
                 "@@VCPKG_SOURCES@@"
             ],
-            "x-comment": "UNRESOLVED: this module has no offline sources for the ~40 vcpkg ports Ladybird depends on (Skia, ICU, FFmpeg, curl, Qt6, etc). vcpkg will try to hit the network during configure/build and this will fail in a real sandboxed (network-less) flatpak-builder run. Rust deps ARE vendored (see sources/cargo-sources.json, regenerate via `task generate-cargo-sources`). See README.md for the vcpkg vendoring plan. Do not submit to Flathub until vcpkg is resolved."
+            "x-comment": "UNRESOLVED: this module has no offline sources for the ~40 vcpkg ports Ladybird depends on (Skia, ICU, FFmpeg, curl, Qt6, etc) -- vcpkg's own tool binary IS now vendored (see the vcpkg-glibc file sources above), but installing any port still needs network. This will fail in a real sandboxed (network-less) flatpak-builder run. Rust deps ARE vendored (see sources/cargo-sources.json, regenerate via `task generate-cargo-sources`). See README.md for the vcpkg port-vendoring plan. Do not submit to Flathub until it's resolved."
         }
     ]
 }

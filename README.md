@@ -1,11 +1,12 @@
 # Ladybird Flatpak (work in progress)
 
 Flatpak packaging for [Ladybird](https://github.com/LadybirdBrowser/ladybird), modeled
-structurally on Flathub's `org.kde.kget` manifest. **This does not build yet.** A real
-`task build` run gets all the way through fetching sources (including all 173 vendored
-Rust crates), SDK/toolchain resolution, and CMake configure, and fails cleanly exactly
-where expected: vcpkg has no network access in the build sandbox. See "What's unresolved"
-below.
+structurally on Flathub's `org.kde.kget` manifest. **This does not build yet, but it's
+close:** a real `task build` run now gets all the way through fetching sources (all 173
+Rust crates + all 66 vcpkg port archives, offline-vendored), SDK/toolchain resolution,
+CMake configure, vcpkg's own tool bootstrap, and starts actually compiling C++ vcpkg
+packages one by one (got to package 7 of 69 before the last stop). See "What's
+unresolved" below for exactly where it stops now and why.
 
 ## Facts this manifest relies on (verified 2026-09-29)
 
@@ -76,24 +77,23 @@ Ladybird's build wants network access twice:
    generator assumes. Not yet verified against an actual build (no `flatpak-builder`
    run has happened), but the source-generation half is solid, known-good tooling.
 
-2. **vcpkg fetching things — IN PROGRESS, now precisely located.** There is no existing
+2. **vcpkg fetching sources — DONE for all 69 ports.** There is no existing
    `flatpak-node-generator`/`flatpak-cargo-generator`-equivalent for vcpkg (checked
-   `flatpak/flatpak-builder-tools` — nothing there as of this writing).
+   `flatpak/flatpak-builder-tools` — nothing there as of this writing), so this needed a
+   purpose-built generator: `tools/generate-vcpkg-sources.py`. Three real, non-obvious
+   fixes were needed to get here, all now verified against a real `task build` run:
 
-   A real `task build` run (freedesktop runtime, see above) gets through source
-   fetching, SDK/extension resolution, and CMake configure, and fails here, confirmed by
-   reading `/run/build/Ladybird/vcpkg-bootstrap.log` from the failed build dir:
-   ```
-   Downloading vcpkg-glibc...
-   curl: (6) Could not resolve host: github.com
-   ```
-   So the *very first* network hit isn't even a port — it's vcpkg's own bootstrap script
-   (`vcpkg/bootstrap-vcpkg.sh`, invoked automatically by `vcpkg.cmake` the first time
-   `find_package`/`vcpkg_install` runs) trying to download vcpkg's own prebuilt tool
-   binary from a GitHub release. That needs vendoring the same way a port does, and comes
-   *before* any of the ~40 port downloads in the dependency-download order.
-
-   Getting to this point required two fixes, both non-obvious and worth keeping straight:
+   - **The bootstrap binary itself needs vendoring first**, confirmed by reading
+     `/run/build/Ladybird/vcpkg-bootstrap.log` from an early failed build:
+     `curl: (6) Could not resolve host: github.com` trying to fetch `vcpkg-glibc`. The
+     *very first* network hit isn't a port — it's `vcpkg/bootstrap-vcpkg.sh` (invoked by
+     `vcpkg.cmake` only if `$VCPKG_ROOT/vcpkg` doesn't already exist) downloading vcpkg's
+     own prebuilt tool binary from a GitHub release. Fixed by adding two `"type": "file"`
+     sources (x86_64/aarch64, gated by `only-arches`) for the exact `vcpkg-glibc`/
+     `vcpkg-glibc-arm64` release asset named in `vcpkg/scripts/vcpkg-tool-metadata.txt`
+     (`VCPKG_TOOL_RELEASE_TAG`/`VCPKG_GLIBC_SHA`), pre-placed at `vcpkg/vcpkg`, plus a
+     `"type": "shell"` source to `chmod +x` it (flatpak `file` sources don't preserve the
+     executable bit). `vcpkg.cmake` then skips `bootstrap-vcpkg.sh` entirely.
    - **Don't set `-DCMAKE_TOOLCHAIN_FILE` directly.** `Meta/CMake/environment.cmake`
      unconditionally does `set(CMAKE_TOOLCHAIN_FILE
      "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "" FORCE)` whenever
@@ -104,44 +104,84 @@ Ladybird's build wants network access twice:
      compute the toolchain-file path itself.
    - **`flatpak-builder` needs `--disable-rofiles-fuse` inside a distrobox** — the
      rofiles-fuse overlay it normally uses needs a FUSE mount, which isn't available
-     inside the container (`fusermount3: ... Permission denied`). This is now baked into
-     `task build`.
+     inside the container (`fusermount3: ... Permission denied`). Baked into `task build`.
 
-   Next concrete step: vendor the vcpkg bootstrap binary the same way as a normal port
-   (pre-place it wherever `bootstrap-vcpkg.sh` looks before it curls, as a flatpak `file`
-   source), confirm the build gets past bootstrap, then handle actual port downloads:
-   - vcpkg caches every port's downloaded archive under `$VCPKG_ROOT/downloads/` (or
-     `VCPKG_DOWNLOADS` if set) with predictable filenames, and vcpkg only re-downloads a
-     file if it's missing — it doesn't require network if the file is already there.
-   - Write a generator script (`tools/generate-vcpkg-sources.py`, doesn't exist yet) that
-     walks that downloads directory, and for each file emits a flatpak `"type": "file"`
-     source with `dest: vcpkg/downloads` and its sha512 (vcpkg's own hash, reusable
-     directly), writing `sources/vcpkg-sources.json` — same shape as the cargo fragment,
-     so it'll be picked up by the existing `@@VCPKG_SOURCES@@` sentinel in
-     `manifest-template.json` automatically once it exists.
-   - Note `Meta/CMake/environment.cmake` also points `X_VCPKG_ASSET_SOURCES` at
+   With the bootstrap binary vendored, `vcpkg install --only-downloads` (a real flag,
+   fetches every port's sources without building them — much faster than a full build for
+   this purpose) was run once, by hand, with network, from inside the distrobox against
+   the exact same pinned commit/triplet/overlay-ports/overlay-triplets the real build
+   uses. That populated `$VCPKG_ROOT/downloads/` with all 66 files needed (some ports
+   share ABI-cache-only entries with no download). `tools/generate-vcpkg-sources.py` turns
+   that directory + the full install log into `sources/vcpkg-sources.json`:
+   - Most files: matched from `"Downloading <url> -> <filename>"` / `"Downloading
+     <filename>, trying <url>"` lines in the log, hashed locally (sha256, computed from
+     the file vcpkg already cached — valid since it's byte-identical to re-fetching that
+     same URL).
+   - vcpkg's own build tools (cmake, ninja): looked up directly from
+     `vcpkg/scripts/vcpkg-tools.json` (authoritative, version-pinned) rather than the log,
+     since vcpkg doesn't reliably re-log these on every run. One (`ninja`) needed a
+     manual filename-override entry, since vcpkg caches it locally under a different name
+     than its own download URL's basename.
+   - **Two ports (skia's bundled `libyuv` and `piex` externals) needed a completely
+     different mechanism**, not a `"file"` source at all: vcpkg fetches them via a raw git
+     clone, packaged into a tarball itself. Their host, googlesource's Gitiles
+     `+archive/<commit>.tar.gz` endpoint, **is not byte-reproducible across requests** —
+     confirmed by fetching the identical commit twice and getting two different sha256
+     hashes. flatpak's hash-pinned `"file"` source type fundamentally can't work against
+     an endpoint like that. Fixed with a hash-pinned `"type": "git"` source (by commit,
+     not download bytes) plus a `"type": "shell"` source that `tar`s the checkout into the
+     exact filename vcpkg expects in `downloads/`, entirely offline. (A third such
+     external, `wuffs-mirror-release-c`, is GitHub-hosted, and GitHub's archive-by-commit
+     endpoint *is* stable, so it stays a normal vendored `"file"` source.)
+
+   Regenerate via `python3 tools/generate-vcpkg-sources.py <vcpkg-checkout>
+   <full-install-log> -o sources/vcpkg-sources.json`, using a *complete, untruncated* log
+   (vcpkg only prints
+   `Downloading` lines on an actual fetch, not a cache hit, so the log must come from a
+   run against an *empty* downloads dir — see git history for the exact commands used).
+   This isn't wired into the Taskfile yet since it needs a real Ladybird checkout with
+   network, not just the pinned `Cargo.lock` `generate-cargo-sources` downloads.
+
+   **Still open:**
+   - `Meta/CMake/environment.cmake` also points `X_VCPKG_ASSET_SOURCES` at
      `https://vcpkg-cache.app.ladybird.org/...` — Ladybird runs its own vcpkg asset
-     mirror. Doesn't remove the offline-vendoring need (it's still a network fetch), but
-     may be a friendlier/more stable single source than each port's original upstream URL
-     if the generator ends up needing to re-fetch anything by hand.
-   - Open question: whether to let vcpkg build its own Qt 6.10.0 from source (correctness,
-     but a very large extra build — Qt from source is itself a multi-GB, multi-hour
-     build) or add an overlay port that redirects Qt to the runtime's Qt6 instead. Needs
-     a decision before vendoring the full port set, since it changes the download set
-     significantly. (`org.freedesktop.Platform` doesn't ship Qt at all, unlike KDE's
-     runtime, so "redirect to the runtime's Qt" is no longer on the table now that we're
-     off the KDE runtime — vcpkg building its own Qt is the only remaining option.)
+     mirror, tried before each port's authoritative upstream URL. Irrelevant to the
+     offline-vendoring approach above (vendored sources are found before any network
+     fetch is attempted either way).
+   - The resolved dependency set (69 packages, logged by a real `task build` run) does
+     **not include Qt** anywhere, despite `vcpkg.json` pinning Qt 6.10.0 and
+     `-DENABLE_QT=ON` being set. Either that CMake option isn't what actually gates the
+     Qt feature/manifest-feature selection, or something else is wrong — needs
+     investigation before the UI can actually build. See "Also not yet done" below.
+   - The `libyuv`/`piex` git+tar fix is unverified against a full (non-`--only-downloads`)
+     vcpkg build — inferred safe from log behavior (no hash-check line for these two),
+     not yet confirmed by successfully building skia end to end.
+
+3. **A new, different category of problem: `pip install` at build time.** A real
+   `task build` run with all of the above in place gets through source fetching
+   entirely and starts compiling real packages — reaching package 7 of 69 (`angle`,
+   Google's GL/Vulkan translation layer that Skia uses) before failing:
+   ```
+   Command failed: .../angle/x64-linux-venv/bin/python -I -m pip install ply
+   ```
+   `angle`'s portfile sets up a Python venv and does `pip install ply` (Python Lex-Yacc)
+   *during the build*, not during source-fetch — a different network dependency than
+   anything above, needing a different fix (vendoring a pip package for offline install,
+   e.g. the approach `flatpak-pip-generator` in `flatpak/flatpak-builder-tools` uses).
+   Not started yet. Other ports later in the dependency order may have similar
+   surprises — this is very unlikely to be the last one.
 
 `org.ladybird.Ladybird.json` still carries an `x-comment` on the `Ladybird` module
-documenting this gap (ignored by flatpak-builder, same convention as KGet's
+documenting the overall gap (ignored by flatpak-builder, same convention as KGet's
 `x-checker-data`), so it's visible in the manifest itself, not just here.
 
 ## Also not yet done
 
-- Haven't confirmed whether `-DENABLE_QT=ON` is the correct/only CMake variable gating the
-  Qt UI (vs. a headless/Android build) — verify against `UI/CMakeLists.txt` and
-  `vcpkg.json`'s `VCPKG_MANIFEST_FEATURES` handling once the build gets far enough to
-  actually reach that code path (it doesn't yet — see vcpkg bootstrap blocker above).
+- `-DENABLE_QT=ON` does not appear to be pulling Qt into the resolved vcpkg dependency
+  set (confirmed: a real `task build` run's package list has no `qt`/`qtbase` entry
+  anywhere in the 69 packages it resolved) — needs investigation against
+  `UI/CMakeLists.txt` and `vcpkg.json`'s `VCPKG_MANIFEST_FEATURES` handling. Without Qt,
+  there's no UI to link against.
 - `finish-args` includes `--share=network` because Ladybird is a *browser* and legitimately
   needs runtime network access (unrelated to the build-time network problem above) — this
   is normal for other browsers on Flathub, not a placeholder.
@@ -179,8 +219,8 @@ tasks: `task --list`.
   `manifest-template.json` + `sources/*.json`.
 - `task update-sources` — the above two, in order.
 - `task build` — runs `flatpak-builder --disable-rofiles-fuse` inside the distrobox.
-  Currently fails once vcpkg's bootstrap script tries to download its own tool binary
-  (see above).
+  Currently fails partway through compiling vcpkg ports, on the first one needing a
+  network `pip install` at build time (see above).
 - `task run` — `flatpak run org.ladybird.Ladybird` (host, no distrobox involved).
 - `task clean` — removes local build artifacts.
 
@@ -203,18 +243,19 @@ running in CI even though it's unused for local dev today.
 
 ## Next steps, in order
 
-1. Vendor vcpkg's own bootstrap tool binary (`vcpkg-glibc`) so `bootstrap-vcpkg.sh` finds
-   it locally instead of curling GitHub — figure out exactly where it looks (probably
-   `$VCPKG_ROOT/downloads/`, matching where port downloads land) and add it as a flatpak
-   `file` source.
-2. Re-run `task build`; confirm it gets past bootstrap and starts actually resolving
-   ports.
-3. Do one network-enabled local vcpkg fetch (now that bootstrap works), write
-   `tools/generate-vcpkg-sources.py` against `$VCPKG_ROOT/downloads/`, produce
-   `sources/vcpkg-sources.json`.
-4. Re-run `task build` again; expect further failed iterations (Rust vendor-dir
-   mismatches, missing headers, the actual multi-hour Qt-from-source build, etc.) before
-   it produces a working `ladybird` binary.
-5. Once it builds and runs, tighten `finish-args`/`cleanup`, add screenshots to the
+1. Fix the `pip install ply` failure in `angle` — likely vendoring `ply` (and its
+   transitive deps, if any) as a flatpak source and installing via `pip install
+   --no-index --find-links=...`, the way `flatpak-pip-generator` in
+   `flatpak/flatpak-builder-tools` does it. Check whether other ports later in the
+   dependency order (69 total, only got to #7) have the same `x_vcpkg_get_python_packages`
+   pattern, and handle them together rather than one at a time.
+2. Re-run `task build`; expect more failed iterations in the remaining ~62 packages
+   (network hits `generate-vcpkg-sources.py` didn't need to know about because they only
+   happen mid-build, not during source-fetch — `pip install` was the first example, keep
+   an eye out for similar patterns like `go install`, `npm install`, or `git submodule`).
+3. Once vcpkg fully installs, investigate the missing-Qt issue above before the actual
+   Ladybird C++/Rust compile even starts — no point letting a multi-hour build run
+   without a UI it can link.
+4. Once it builds and runs, tighten `finish-args`/`cleanup`, add screenshots to the
    AppStream metainfo if upstream's is missing them, and go through Flathub's submission
    checklist.
