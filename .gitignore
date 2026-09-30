@@ -3,3 +3,4 @@ build/
 *.flatpak
 repo/
 .vscode/
+.cache/

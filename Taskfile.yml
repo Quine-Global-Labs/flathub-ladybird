@@ -1,0 +1,59 @@
+version: "3"
+
+vars:
+  APP_ID: org.ladybird.Ladybird
+  LADYBIRD_COMMIT: 618693e7173413d0a6e23d6449164170b1c7dae8
+  RUNTIME_VERSION: "6.10"
+  SCRATCH: .cache
+
+tasks:
+  install-tools:
+    desc: Install the local tooling needed to work on this manifest (uv, flatpak-builder, runtimes)
+    cmds:
+      - command -v uv >/dev/null || brew install uv
+      - flatpak install -y --user flathub org.flatpak.Builder
+      - flatpak install -y --user flathub org.kde.Platform//{{.RUNTIME_VERSION}} org.kde.Sdk//{{.RUNTIME_VERSION}}
+      - flatpak install -y --user flathub org.freedesktop.Sdk.Extension.rust-stable//{{.RUNTIME_VERSION}}
+
+  fetch-cargo-lock:
+    desc: Download Cargo.lock from the pinned Ladybird commit
+    cmds:
+      - mkdir -p {{.SCRATCH}}
+      - curl -fsSL -o {{.SCRATCH}}/Cargo.lock https://raw.githubusercontent.com/LadybirdBrowser/ladybird/{{.LADYBIRD_COMMIT}}/Cargo.lock
+    status:
+      - test -f {{.SCRATCH}}/Cargo.lock
+
+  generate-cargo-sources:
+    desc: Regenerate sources/cargo-sources.json from the pinned Cargo.lock
+    deps: [fetch-cargo-lock]
+    cmds:
+      - uv run tools/flatpak-cargo-generator.py {{.SCRATCH}}/Cargo.lock -o sources/cargo-sources.json
+
+  generate-manifest:
+    desc: Assemble org.ladybird.Ladybird.json from manifest-template.json + sources/*.json
+    cmds:
+      - python3 tools/generate-manifest.py
+
+  update-sources:
+    desc: Full refresh -- regenerate cargo sources and reassemble the manifest
+    cmds:
+      - task: generate-cargo-sources
+      - task: generate-manifest
+
+  build:
+    desc: >
+      Build the flatpak with flatpak-builder. Will currently fail once vcpkg
+      tries to fetch ports -- that part isn't vendored yet, see README.md.
+    deps: [generate-manifest]
+    cmds:
+      - flatpak-builder --user --install --force-clean --ccache build {{.APP_ID}}.json
+
+  run:
+    desc: Run the installed flatpak
+    cmds:
+      - flatpak run {{.APP_ID}}
+
+  clean:
+    desc: Remove local build artifacts (not sources/ or the manifest)
+    cmds:
+      - rm -rf build .flatpak-builder {{.SCRATCH}}
