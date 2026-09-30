@@ -1,8 +1,8 @@
 {
     "id": "org.ladybird.Ladybird",
-    "runtime": "org.kde.Platform",
-    "runtime-version": "6.10",
-    "sdk": "org.kde.Sdk",
+    "runtime": "org.freedesktop.Platform",
+    "runtime-version": "26.08",
+    "sdk": "org.freedesktop.Sdk",
     "sdk-extensions": [
         "org.freedesktop.Sdk.Extension.rust-stable"
     ],
@@ -20,7 +20,8 @@
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin",
         "env": {
-            "CARGO_HOME": "/run/build/Ladybird/cargo"
+            "CARGO_HOME": "/run/build/Ladybird/cargo",
+            "VCPKG_ROOT": "/run/build/Ladybird/vcpkg"
         }
     },
     "cleanup": [
@@ -39,7 +40,6 @@
             "config-opts": [
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DCMAKE_INSTALL_PREFIX=/app",
-                "-DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake",
                 "-DVCPKG_INSTALLED_DIR=vcpkg_installed",
                 "-DBUILD_SHARED_LIBS=OFF",
                 "-DLADYBIRD_VCPKG_TYPE=distribution",

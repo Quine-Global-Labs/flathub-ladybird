@@ -3,7 +3,14 @@ version: "3"
 vars:
   APP_ID: org.ladybird.Ladybird
   LADYBIRD_COMMIT: 618693e7173413d0a6e23d6449164170b1c7dae8
-  RUNTIME_VERSION: "6.10"
+  # freedesktop.org's own Platform/Sdk, not KDE's -- Ladybird builds its own Qt 6.10.0
+  # from source via vcpkg regardless of what the runtime provides, and sdk-extensions
+  # (rust-stable below) are always branched to match runtime-version exactly, with no
+  # way to pin a different branch per-extension. KDE's runtime branches ("6.10") don't
+  # correspond to any published rust-stable branch, so that combination can never work;
+  # freedesktop-sdk's own branch numbers do, and 26.08 happens to ship rust-stable
+  # 1.98.0, an exact match for Ladybird's rust-toolchain.toml pin.
+  RUNTIME_VERSION: "26.08"
   SCRATCH: .cache
   DISTROBOX_NAME: flatpak-builder
   # flatpak-builder itself has no Homebrew formula and needs deep system integration
@@ -19,7 +26,7 @@ tasks:
     cmds:
       - distrobox create --name {{.DISTROBOX_NAME}} --image fedora:latest --yes
       - "{{.IN_BOX}} sudo dnf install -y flatpak-builder flatpak git"
-      - flatpak install -y --user flathub org.kde.Platform//{{.RUNTIME_VERSION}} org.kde.Sdk//{{.RUNTIME_VERSION}}
+      - flatpak install -y --user flathub org.freedesktop.Platform//{{.RUNTIME_VERSION}} org.freedesktop.Sdk//{{.RUNTIME_VERSION}}
       - flatpak install -y --user flathub org.freedesktop.Sdk.Extension.rust-stable//{{.RUNTIME_VERSION}}
 
   fetch-cargo-lock:
@@ -54,7 +61,7 @@ tasks:
       part isn't vendored yet, see README.md.
     deps: [generate-manifest]
     cmds:
-      - "{{.IN_BOX}} flatpak-builder --user --install --force-clean --ccache build {{.APP_ID}}.json"
+      - "{{.IN_BOX}} flatpak-builder --disable-rofiles-fuse --user --install --force-clean --ccache build {{.APP_ID}}.json"
 
   run:
     desc: Run the installed flatpak (host flatpak sees it too, since the distrobox shares ~/.local/share/flatpak)
