@@ -80,9 +80,18 @@ func nixContainer(src *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From("nixos/nix:2.32.3").
 		WithEnvVariable("NIX_CONFIG", "experimental-features = nix-command flakes").
-		WithMountedCache("/nix/var/nix/db", dag.CacheVolume("flathub-ladybird-nix-db")).
-		WithMountedCache("/nix/store", dag.CacheVolume("flathub-ladybird-nix-store")).
 		WithDirectory("/repo", src).
 		WithWorkdir("/repo").
 		WithExec([]string{"nix", "develop", "--command", "true"})
 }
+
+// Cache volumes deliberately NOT mounted at /nix/var/nix/db or /nix/store: a
+// Dagger cache volume starts empty and is mounted AT that exact path,
+// replacing (not merging with) whatever the base image already has there --
+// which for nixos/nix is the nix binary itself and its entire dependency
+// closure. First real run of this module (in CI, the local Dagger engine
+// being unusable) hit exactly this: "nix: executable file not found in
+// $PATH" despite the image nominally shipping it. Losing package-download
+// caching across Dagger runs as a result is an acceptable tradeoff for
+// correctness -- flatpak-builder etc. come from cache.nixos.org quickly
+// regardless, dwarfed by the actual multi-hour Ladybird/vcpkg build time.
