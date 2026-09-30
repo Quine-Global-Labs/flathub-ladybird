@@ -46,6 +46,26 @@ func (m *FlathubLadybird) Build(ctx context.Context,
 	bundleName := appID + ".flatpak"
 
 	return nixContainer(src).
+		// A fresh container has no Flatpak runtimes at all -- mirrors what
+		// `task install-tools` does on a dev machine. Cached across Dagger
+		// runs (org.freedesktop.Platform/Sdk alone are >1GB) since the
+		// runtime version rarely changes.
+		WithMountedCache("/root/.local/share/flatpak", dag.CacheVolume("flathub-ladybird-flatpak-runtimes")).
+		WithExec([]string{
+			"nix", "develop", "--command",
+			"flatpak", "remote-add", "--user", "--if-not-exists", "flathub",
+			"https://flathub.org/repo/flathub.flatpakrepo",
+		}).
+		WithExec([]string{
+			"nix", "develop", "--command",
+			"flatpak", "install", "-y", "--user", "flathub",
+			"org.freedesktop.Platform//26.08", "org.freedesktop.Sdk//26.08",
+		}).
+		WithExec([]string{
+			"nix", "develop", "--command",
+			"flatpak", "install", "-y", "--user", "flathub",
+			"org.freedesktop.Sdk.Extension.rust-stable//26.08",
+		}).
 		WithMountedCache("/repo/Build/caches/vcpkg-binary-cache", dag.CacheVolume("flathub-ladybird-vcpkg-binary-cache")).
 		WithMountedCache("/root/.cache/ccache", dag.CacheVolume("flathub-ladybird-ccache")).
 		WithExec([]string{

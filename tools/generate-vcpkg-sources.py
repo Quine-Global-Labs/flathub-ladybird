@@ -49,30 +49,23 @@ EXCLUDE_DIR_NAMES = {"tools", "git-tmp", "temp", "__pycache__"}
 # from anywhere, so there's nothing to vendor; just don't flag them as unmatched.
 NOT_A_DOWNLOAD = {"parsetab.py"}
 
-# Kind 3a: ports vcpkg fetches via git clone + packages into downloads/<file> itself,
-# where the origin also serves a stable/reproducible archive-by-commit endpoint (GitHub
-# does). filename (as it lands in downloads/) -> (re-fetch url, sha256 of that url's
-# content). Hand-verified against the pinned vcpkg commit in manifest-template.json;
-# re-derive if that pin ever moves and this script reports these filenames as unmatched.
-GIT_DERIVED = {
-    "skia-e3f919ccfe3ef542cfc983a82146070258fb57f8.tar.gz": (
-        "https://github.com/google/wuffs-mirror-release-c/archive/e3f919ccfe3ef542cfc983a82146070258fb57f8.tar.gz",
-        "e849dab1f372f16b782ba7528e7f70281e35425bd2d644c92a36fb95909f98db",
-    ),
-}
-
-# Kind 3b: same as above, but the origin (googlesource/Gitiles) serves a DIFFERENT set
-# of bytes for its "+archive" endpoint on every single request (confirmed: two fetches
-# of the identical commit produced two different sha256 hashes), so it can never satisfy
-# a hash-pinned flatpak "file" source. These are handled directly in
-# manifest-template.json instead, as a hash-pinned "git" source (commit, not download
-# bytes, is the integrity guarantee) plus a "shell" source that `tar`s the checkout into
-# the exact filename vcpkg expects in downloads/ -- skipped here, not reported as
-# unmatched.
+# Kind 3: ports vcpkg fetches via git clone + packages into downloads/<file> itself, so
+# there's no distfile URL to point a hash-pinned flatpak "file" source at even when the
+# origin's archive-by-commit endpoint is stable (GitHub's is; googlesource's Gitiles is
+# NOT -- confirmed: two fetches of the identical commit produced two different sha256
+# hashes -- but GitHub's turned out to have the opposite problem instead: it wraps
+# content in an extra "<repo>-<commit>/" directory that skia's build doesn't expect,
+# breaking the ninja build several steps later with a confusing "missing file" error
+# rather than a hash mismatch). All of these are handled directly in
+# manifest-template.json instead: a hash-pinned "git" source (commit, not download
+# bytes, is the integrity guarantee -- and produces the unwrapped layout skia wants) plus
+# a "shell" source that `tar`s the checkout into the exact filename vcpkg expects in
+# downloads/ -- skipped here, not reported as unmatched.
 GIT_SOURCE_HANDLED_ELSEWHERE = {
     "libyuv-d98915a654d3564e4802a0004add46221c4e4348.tar.gz",
     "skia-bb217acdca1cc0c16b704669dd6f91a1b509c406.tar.gz",
     "angle-4028ebf8710ee39d2286cb0f847f9b95c59f84d8.tar.gz",
+    "skia-e3f919ccfe3ef542cfc983a82146070258fb57f8.tar.gz",
 }
 
 DOWNLOADING_ARROW_RE = re.compile(r"^Downloading (\S+) -> (\S+)$")
@@ -145,14 +138,11 @@ def main() -> None:
         if entry.name in GIT_SOURCE_HANDLED_ELSEWHERE or entry.name in NOT_A_DOWNLOAD:
             continue
 
-        if entry.name in GIT_DERIVED:
-            url, sha256 = GIT_DERIVED[entry.name]
-        else:
-            url = TOOL_FILENAME_OVERRIDES.get(entry.name) or tool_urls.get(entry.name) or log_urls.get(entry.name)
-            if url is None:
-                unmatched.append(entry.name)
-                continue
-            sha256 = sha256_of(entry)
+        url = TOOL_FILENAME_OVERRIDES.get(entry.name) or tool_urls.get(entry.name) or log_urls.get(entry.name)
+        if url is None:
+            unmatched.append(entry.name)
+            continue
+        sha256 = sha256_of(entry)
 
         sources.append({
             "type": "file",

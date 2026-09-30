@@ -442,13 +442,6 @@
     },
     {
         "type": "file",
-        "url": "https://github.com/google/wuffs-mirror-release-c/archive/e3f919ccfe3ef542cfc983a82146070258fb57f8.tar.gz",
-        "sha256": "e849dab1f372f16b782ba7528e7f70281e35425bd2d644c92a36fb95909f98db",
-        "dest": "vcpkg/downloads",
-        "dest-filename": "skia-e3f919ccfe3ef542cfc983a82146070258fb57f8.tar.gz"
-    },
-    {
-        "type": "file",
         "url": "https://sqlite.org/2026/sqlite-autoconf-3530300.tar.gz",
         "sha256": "c917d7db16648ec95f714974ace5e5dcf46b7dc70e26600a0a102a3141125db0",
         "dest": "vcpkg/downloads",
