@@ -136,7 +136,7 @@
                 "@@CARGO_SOURCES@@",
                 "@@VCPKG_SOURCES@@"
             ],
-            "x-comment": "Offline vendoring for vcpkg: a real flatpak-builder sandboxed build reached all the way to skia's actual ninja compile step (package 65/69) using these sources before finding the wuffs wrapping-directory bug described above; that's now fixed the same way as the other three git externals. Not yet re-confirmed end to end after that fix -- that's the immediate next thing to verify. Rust deps ARE vendored and manifest-verified (see sources/cargo-sources.json). See README.md for full details and what's still open (notably: -DENABLE_QT=ON doesn't appear to pull Qt into the resolved package set)."
+            "x-comment": "Offline vendoring for vcpkg: a real GitHub Actions CI run (.github/workflows/build.yml, via the Dagger module) compiled 68 of 69 vcpkg ports successfully, including skia, before failing cleanly over network on the very last one (the top-level 'wuffs' port needing google-wuffs-mirror-release-c-v0.3.4.tar.gz, now added below). That fix is NOT yet re-confirmed by a CI run -- that's the immediate next thing to verify, not something to assume worked. Rust deps ARE vendored and CI-verified (see sources/cargo-sources.json). See README.md for full details and what's still open (notably: -DENABLE_QT=ON doesn't appear to pull Qt into the resolved package set)."
         }
     ]
 }

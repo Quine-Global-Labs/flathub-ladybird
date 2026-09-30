@@ -2604,6 +2604,13 @@
                 },
                 {
                     "type": "file",
+                    "url": "https://github.com/google/wuffs-mirror-release-c/archive/v0.3.4.tar.gz",
+                    "sha256": "d1c1e269ddbcef7c0452f8b9f645a4cb78b149f4bc679552d43b50fc41b549c3",
+                    "dest": "vcpkg/downloads",
+                    "dest-filename": "google-wuffs-mirror-release-c-v0.3.4.tar.gz"
+                },
+                {
+                    "type": "file",
                     "url": "https://ftpmirror.gnu.org/gnu/gperf/gperf-3.3.tar.gz",
                     "sha256": "fd87e0aba7e43ae054837afd6cd4db03a3f2693deb3619085e6ed9d8d9604ad8",
                     "dest": "vcpkg/downloads",
@@ -2862,7 +2869,7 @@
                     "dest-filename": "webmproject-libwebp-v1.6.0.tar.gz"
                 }
             ],
-            "x-comment": "Offline vendoring for vcpkg: a real flatpak-builder sandboxed build reached all the way to skia's actual ninja compile step (package 65/69) using these sources before finding the wuffs wrapping-directory bug described above; that's now fixed the same way as the other three git externals. Not yet re-confirmed end to end after that fix -- that's the immediate next thing to verify. Rust deps ARE vendored and manifest-verified (see sources/cargo-sources.json). See README.md for full details and what's still open (notably: -DENABLE_QT=ON doesn't appear to pull Qt into the resolved package set)."
+            "x-comment": "Offline vendoring for vcpkg: a real GitHub Actions CI run (.github/workflows/build.yml, via the Dagger module) compiled 68 of 69 vcpkg ports successfully, including skia, before failing cleanly over network on the very last one (the top-level 'wuffs' port needing google-wuffs-mirror-release-c-v0.3.4.tar.gz, now added below). That fix is NOT yet re-confirmed by a CI run -- that's the immediate next thing to verify, not something to assume worked. Rust deps ARE vendored and CI-verified (see sources/cargo-sources.json). See README.md for full details and what's still open (notably: -DENABLE_QT=ON doesn't appear to pull Qt into the resolved package set)."
         }
     ]
 }

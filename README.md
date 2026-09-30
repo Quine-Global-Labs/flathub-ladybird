@@ -1,12 +1,13 @@
 # Ladybird Flatpak (work in progress)
 
 Flatpak packaging for [Ladybird](https://github.com/LadybirdBrowser/ladybird), modeled
-structurally on Flathub's `org.kde.kget` manifest. **This does not build yet, but it's
-close:** a real `task build` run now gets all the way through fetching sources (all 173
-Rust crates + all 66 vcpkg port archives, offline-vendored), SDK/toolchain resolution,
-CMake configure, vcpkg's own tool bootstrap, and starts actually compiling C++ vcpkg
-packages one by one (got to package 7 of 69 before the last stop). See "What's
-unresolved" below for exactly where it stops now and why.
+structurally on Flathub's `org.kde.kget` manifest. **Very close to building clean:** a
+real GitHub Actions run (via the Dagger module, `.github/workflows/build.yml`) got all
+the way through vcpkg's full dependency graph -- all 173 Rust crates, all 68 vcpkg
+sources, every build-time network dependency found so far -- compiling 68 of 69 vcpkg
+ports successfully (~52 minutes) before failing on the very last one, over a single
+missing vendored file. See "What's unresolved" for that file and the couple of other
+loose ends before Ladybird's own C++/Rust compile can even start.
 
 ## Facts this manifest relies on (verified 2026-09-29)
 
@@ -77,11 +78,12 @@ Ladybird's build wants network access twice:
    generator assumes. Not yet verified against an actual build (no `flatpak-builder`
    run has happened), but the source-generation half is solid, known-good tooling.
 
-2. **vcpkg fetching sources — DONE for all 69 ports.** There is no existing
-   `flatpak-node-generator`/`flatpak-cargo-generator`-equivalent for vcpkg (checked
-   `flatpak/flatpak-builder-tools` — nothing there as of this writing), so this needed a
-   purpose-built generator: `tools/generate-vcpkg-sources.py`. Three real, non-obvious
-   fixes were needed to get here, all now verified against a real `task build` run:
+2. **vcpkg fetching sources — 68 of 69 ports confirmed in real CI, 1 fixed but
+   unverified.** There is no existing `flatpak-node-generator`/`flatpak-cargo-generator`-
+   equivalent for vcpkg (checked `flatpak/flatpak-builder-tools` — nothing there as of
+   this writing), so this needed a purpose-built generator:
+   `tools/generate-vcpkg-sources.py`. Several real, non-obvious fixes were needed to get
+   here:
 
    - **The bootstrap binary itself needs vendoring first**, confirmed by reading
      `/run/build/Ladybird/vcpkg-bootstrap.log` from an early failed build:
@@ -122,25 +124,40 @@ Ladybird's build wants network access twice:
      since vcpkg doesn't reliably re-log these on every run. One (`ninja`) needed a
      manual filename-override entry, since vcpkg caches it locally under a different name
      than its own download URL's basename.
-   - **Two ports (skia's bundled `libyuv` and `piex` externals) needed a completely
-     different mechanism**, not a `"file"` source at all: vcpkg fetches them via a raw git
-     clone, packaged into a tarball itself. Their host, googlesource's Gitiles
-     `+archive/<commit>.tar.gz` endpoint, **is not byte-reproducible across requests** —
-     confirmed by fetching the identical commit twice and getting two different sha256
-     hashes. flatpak's hash-pinned `"file"` source type fundamentally can't work against
-     an endpoint like that. Fixed with a hash-pinned `"type": "git"` source (by commit,
-     not download bytes) plus a `"type": "shell"` source that `tar`s the checkout into the
-     exact filename vcpkg expects in `downloads/`, entirely offline. (A third such
-     external, `wuffs-mirror-release-c`, is GitHub-hosted, and GitHub's archive-by-commit
-     endpoint *is* stable, so it stays a normal vendored `"file"` source.)
+   - **Four ports needed a completely different mechanism**, not a `"file"` source at
+     all: skia bundles `libyuv` and `piex` as externals, and angle bundles a chromium zlib
+     fork, all fetched by vcpkg via a raw git clone and packaged into a tarball itself.
+     Their host, googlesource's Gitiles `+archive/<commit>.tar.gz` endpoint, **is not
+     byte-reproducible across requests** — confirmed by fetching the identical commit
+     twice and getting two different sha256 hashes, so flatpak's hash-pinned `"file"`
+     source type fundamentally can't work against it. The fourth, skia's bundled
+     `wuffs-mirror-release-c`, is GitHub-hosted and GitHub's archive-by-commit endpoint
+     *is* stable — but it wraps content in an extra `"<repo>-<commit>/"` directory that
+     skia's build doesn't expect, confirmed by a real sandboxed build reaching skia's
+     actual `ninja` compile step and failing with a "missing file" error, not a hash
+     mismatch. All four now use the same fix: a hash-pinned `"type": "git"` source (by
+     commit, not download bytes — sidesteps both problems) plus a `"type": "shell"` source
+     that `tar`s the checkout into the exact filename vcpkg expects in `downloads/`,
+     entirely offline, with no wrapping directory.
+   - **The very last port (of 69) needs one more file that every local vendoring pass
+     happened to fail to capture**: `wuffs` itself (not the skia-internal
+     `wuffs-mirror-release-c` above — a separate top-level port, same upstream repo,
+     fetched by tag rather than commit) downloads
+     `google-wuffs-mirror-release-c-v0.3.4.tar.gz`. Confirmed via a real GitHub Actions
+     CI run of this module (`.github/workflows/build.yml`) that got all the way through
+     68 of 69 ports (~52 minutes, including compiling skia) before failing here, cleanly,
+     over network. Every local exploration run had hit a transient DNS failure at exactly
+     this file and never noticed the gap. Fixed by fetching it directly and adding it as a
+     normal vendored `"file"` source — **this fix itself is not yet re-verified end to
+     end** (next CI run after this commit is the test).
 
    Regenerate via `python3 tools/generate-vcpkg-sources.py <vcpkg-checkout>
    <full-install-log> -o sources/vcpkg-sources.json`, using a *complete, untruncated* log
-   (vcpkg only prints
-   `Downloading` lines on an actual fetch, not a cache hit, so the log must come from a
-   run against an *empty* downloads dir — see git history for the exact commands used).
-   This isn't wired into the Taskfile yet since it needs a real Ladybird checkout with
-   network, not just the pinned `Cargo.lock` `generate-cargo-sources` downloads.
+   (vcpkg only prints `Downloading` lines on an actual fetch, not a cache hit, so the log
+   must come from a run against an *empty* downloads dir — see git history for the exact
+   commands used). This isn't wired into the Taskfile yet since it needs a real Ladybird
+   checkout with network, not just the pinned `Cargo.lock` `generate-cargo-sources`
+   downloads.
 
    **Still open:**
    - `Meta/CMake/environment.cmake` also points `X_VCPKG_ASSET_SOURCES` at
@@ -153,27 +170,50 @@ Ladybird's build wants network access twice:
      `-DENABLE_QT=ON` being set. Either that CMake option isn't what actually gates the
      Qt feature/manifest-feature selection, or something else is wrong — needs
      investigation before the UI can actually build. See "Also not yet done" below.
-   - The `libyuv`/`piex` git+tar fix is unverified against a full (non-`--only-downloads`)
-     vcpkg build — inferred safe from log behavior (no hash-check line for these two),
-     not yet confirmed by successfully building skia end to end.
 
-3. **A new, different category of problem: `pip install` at build time.** A real
-   `task build` run with all of the above in place gets through source fetching
-   entirely and starts compiling real packages — reaching package 7 of 69 (`angle`,
-   Google's GL/Vulkan translation layer that Skia uses) before failing:
-   ```
-   Command failed: .../angle/x64-linux-venv/bin/python -I -m pip install ply
-   ```
-   `angle`'s portfile sets up a Python venv and does `pip install ply` (Python Lex-Yacc)
-   *during the build*, not during source-fetch — a different network dependency than
-   anything above, needing a different fix (vendoring a pip package for offline install,
-   e.g. the approach `flatpak-pip-generator` in `flatpak/flatpak-builder-tools` uses).
-   Not started yet. Other ports later in the dependency order may have similar
-   surprises — this is very unlikely to be the last one.
+3. **`pip install` at build time — fixed and CI-verified.** `angle`'s portfile sets up a
+   Python venv and does `pip install ply` (Python Lex-Yacc) *during the build*, not during
+   source-fetch — the only such case found across all 69 ports. Fixed by vendoring `ply`'s
+   wheel as a normal `"file"` source (`dest: pip-vendor`) plus `PIP_NO_INDEX=1` /
+   `PIP_FIND_LINKS=/run/build/Ladybird/pip-vendor` in `build-options.env`, and confirmed
+   working end to end in the same CI run that got to 68/69 ports — `angle`'s `pip install`,
+   its separate `vcpkg_download_distfile` fetch of a WebKit `CMakeLists.txt`, and its git
+   zlib external all succeeded with zero network errors.
 
 `org.ladybird.Ladybird.json` still carries an `x-comment` on the `Ladybird` module
 documenting the overall gap (ignored by flatpak-builder, same convention as KGet's
 `x-checker-data`), so it's visible in the manifest itself, not just here.
+
+## CI (GitHub Actions + Dagger)
+
+`.github/workflows/build.yml` installs the Dagger CLI directly (same pattern as
+`quine-global/quintodrome`'s `ci.yml` — no third-party GitHub Action) and runs
+`dagger call build --src=. export --path=./org.ladybird.Ladybird.flatpak`, calling the
+`Build` function in `.dagger/main.go`. This module was hand-written, never run through
+`dagger develop` (the local Dagger engine on the dev machine it was built on got stuck in
+an unkillable kernel state), so **GitHub Actions is this module's actual test
+environment** — every bug below was found and fixed by pushing and watching a real run,
+not locally:
+
+1. `WithMountedCache` at `/nix/store` mounts an initially-empty volume AT that exact path,
+   replacing rather than merging with whatever the `nixos/nix` base image already has
+   there — including the `nix` binary itself. Fixed by not caching `/nix/store`/
+   `/nix/var/nix/db` at all; losing package-download caching across Dagger runs is a
+   reasonable tradeoff dwarfed by the actual build time.
+2. A fresh container has no Flatpak runtimes installed at all. `Build` now adds the
+   flathub remote and installs `org.freedesktop.Platform`/`Sdk//26.08` and the
+   `rust-stable` extension first, cached via a Dagger cache volume at
+   `~/.local/share/flatpak`.
+3. `flatpak-builder` creates a fresh bubblewrap sandbox per build step, needing to create
+   a Linux user namespace — not permitted by default inside a Dagger container
+   (`bwrap: No permissions to create a new namespace`). Fixed with
+   `dagger.ContainerWithExecOpts{InsecureRootCapabilities: true}` on that one `WithExec`
+   (Docker `--privileged` equivalent).
+
+With all three fixed, a real run got through all source fetching and 68 of 69 vcpkg ports
+(~52 minutes) before hitting the `wuffs` vendoring gap described above — not a Dagger/CI
+problem, a manifest one. The next CI run is the actual end-to-end test of everything in
+this README.
 
 ## Also not yet done
 
@@ -243,19 +283,16 @@ running in CI even though it's unused for local dev today.
 
 ## Next steps, in order
 
-1. Fix the `pip install ply` failure in `angle` — likely vendoring `ply` (and its
-   transitive deps, if any) as a flatpak source and installing via `pip install
-   --no-index --find-links=...`, the way `flatpak-pip-generator` in
-   `flatpak/flatpak-builder-tools` does it. Check whether other ports later in the
-   dependency order (69 total, only got to #7) have the same `x_vcpkg_get_python_packages`
-   pattern, and handle them together rather than one at a time.
-2. Re-run `task build`; expect more failed iterations in the remaining ~62 packages
-   (network hits `generate-vcpkg-sources.py` didn't need to know about because they only
-   happen mid-build, not during source-fetch — `pip install` was the first example, keep
-   an eye out for similar patterns like `go install`, `npm install`, or `git submodule`).
-3. Once vcpkg fully installs, investigate the missing-Qt issue above before the actual
-   Ladybird C++/Rust compile even starts — no point letting a multi-hour build run
-   without a UI it can link.
+1. Push the `wuffs` fix and watch the next CI run (`gh run watch` /
+   `gh run list --repo quine-global-labs/flathub-ladybird`) — this is the actual
+   end-to-end test of every fix in this README, not something to assume worked.
+2. If vcpkg fully installs: investigate the missing-Qt issue above before the actual
+   Ladybird C++/Rust compile even starts — no point spending build time without a UI it
+   can link.
+3. If vcpkg fully installs but Qt does get resolved somehow: let the Ladybird compile
+   itself run and see what (if anything) it needs that isn't already in the Nix devShell
+   (`flake.nix`) or the freedesktop SDK.
 4. Once it builds and runs, tighten `finish-args`/`cleanup`, add screenshots to the
-   AppStream metainfo if upstream's is missing them, and go through Flathub's submission
-   checklist.
+   AppStream metainfo if upstream's is missing them, decide on the aarch64 build (only
+   x86_64 has been vendored/tested so far, despite `flathub.json` listing both), and go
+   through Flathub's submission checklist.
