@@ -72,6 +72,16 @@ func (m *FlathubLadybird) Build(ctx context.Context,
 			"nix", "develop", "--command",
 			"flatpak-builder", "--disable-rofiles-fuse", "--force-clean", "--ccache",
 			"--repo=repo", "build", appID + ".json",
+		}, dagger.ContainerWithExecOpts{
+			// flatpak-builder creates a fresh bubblewrap sandbox for every
+			// build step, which needs to create a Linux user namespace --
+			// not permitted by default inside a Dagger/buildkit container.
+			// Confirmed necessary: the first real CI run without this got
+			// through all source fetching (~7 min) and failed immediately
+			// on the first actual build step with "bwrap: No permissions to
+			// create a new namespace, likely because the kernel does not
+			// allow non-privileged user namespaces."
+			InsecureRootCapabilities: true,
 		}).
 		WithExec([]string{
 			"nix", "develop", "--command",
