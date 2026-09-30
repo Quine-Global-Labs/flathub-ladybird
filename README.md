@@ -43,13 +43,25 @@ task run              # flatpak run org.ladybird.Ladybird
 `task update` pulls the latest `ladybird/` checkout before a rebuild. `task clean`
 removes local build artifacts (not the checkout itself).
 
-Not yet run to completion on this machine as of this commit — `task build` is the actual
-test. Upstream's CI runs this manifest inside
-`ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10` with `--privileged` (needed for
-flatpak-builder's per-step bubblewrap sandbox to create a Linux user namespace, the same
-issue the `vcpkg-approach` branch's Dagger module hit and fixed with
-`InsecureRootCapabilities`); the distrobox here should have equivalent privileges, but
-that's an assumption to verify, not a settled fact.
+**Confirmed working end to end on 2026-09-30**: `task build` compiles every dependency
+module (angle, skia, openssl, ffmpeg, etc.) and the main `Ladybird` module itself, installs
+cleanly, and `flatpak run org.ladybird.Ladybird` launches with no errors. Two things worth
+knowing if you hit them:
+
+- `flatpak-builder` needs `--install-deps-from=flathub` (already in `task build`). Without
+  it, it fails immediately with `Requested extension
+  org.freedesktop.Sdk.Extension.llvm20/x86_64/6.10 not installed` — `llvm20`/`rust-stable`
+  are never published under a branch numbered "6.10" on Flathub (confirmed directly against
+  the remote), so a naive pre-install of the runtime doesn't satisfy the SDK's declared
+  extension points. `--install-deps-from` makes flatpak-builder resolve and install them
+  correctly itself; upstream's CI gets this for free because its container image
+  (`ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10`) already has them deployed.
+- `--disable-rofiles-fuse` (already in `task build`) is needed inside the distrobox, same
+  as discovered on the `vcpkg-approach` branch — no FUSE mount available in the container.
+  Unlike that branch's Dagger module, this distrobox did *not* need any extra privilege
+  grant for bubblewrap's per-step sandbox (it just worked), so `InsecureRootCapabilities`
+  wasn't needed here — evidently distrobox containers already have sufficient namespace
+  permissions by default on this host.
 
 ## Flathub submission
 

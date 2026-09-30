@@ -40,7 +40,7 @@ tasks:
     desc: Build upstream's flatpak manifest with flatpak-builder, run inside the flatpak-builder distrobox
     deps: [clone]
     cmds:
-      - "{{.IN_BOX}} bash -c 'cd {{.LADYBIRD_DIR}} && flatpak-builder --disable-rofiles-fuse --user --install --force-clean --ccache build {{.MANIFEST_PATH}}'"
+      - "{{.IN_BOX}} bash -c 'cd {{.LADYBIRD_DIR}} && flatpak-builder --disable-rofiles-fuse --install-deps-from=flathub --user --install --force-clean --ccache build {{.MANIFEST_PATH}}'"
 
   run:
     desc: Run the installed flatpak (host flatpak sees it too, since the distrobox shares ~/.local/share/flatpak)
