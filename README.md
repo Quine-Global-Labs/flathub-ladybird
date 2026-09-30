@@ -88,9 +88,6 @@ documenting this gap (ignored by flatpak-builder, same convention as KGet's
 
 ## Also not yet done
 
-- `flatpak-builder` itself still isn't installed in this environment (only the `flatpak`
-  client) — `task install-tools` will fetch it as `org.flatpak.Builder` plus the KDE
-  6.10 runtime/SDK and the rust-stable SDK extension, but hasn't been run yet.
 - Haven't confirmed whether `-DENABLE_QT=ON` is the correct/only CMake variable gating the
   Qt UI (vs. a headless/Android build) — verify against `UI/CMakeLists.txt` and
   `vcpkg.json`'s `VCPKG_MANIFEST_FEATURES` handling once a build is actually attempted.
@@ -104,19 +101,57 @@ documenting this gap (ignored by flatpak-builder, same convention as KGet's
 
 ## Working on this (Taskfile)
 
-Requires [`go-task`](https://taskfile.dev). All tasks: `task --list`.
+**Local dev tooling is a Fedora [distrobox](https://distrobox.it/), not Nix.**
+`flatpak-builder` has no Homebrew formula (it's too tied to system ostree/bubblewrap/
+polkit integration) and its own Docker/OCI images aren't a good fit for a Nix devShell
+either, so `task install-tools` creates a `flatpak-builder` distrobox (Fedora, has the
+package) and installs it there. The distrobox shares this user's home directory, so
+`~/.local/share/flatpak` is the same install the host `flatpak` command reads — builds
+done inside the box are runnable directly from outside it (`task run` doesn't need the
+box at all). This also avoids a real trap: `flatpak install org.flatpak.Builder` installs
+a Flatpak *app*, not a `flatpak-builder` CLI binary on `$PATH` — it doesn't actually give
+you a working `flatpak-builder` command, which is why an earlier version of this workflow
+broke with `"flatpak-builder": executable file not found in $PATH`.
 
-- `task install-tools` — installs `uv`, `flatpak-builder` (as `org.flatpak.Builder`), the
-  KDE 6.10 platform/SDK, and the rust-stable SDK extension.
+`uv` (used to run `tools/flatpak-cargo-generator.py`) and `go-task` itself come from
+Homebrew directly — no container needed for those.
+
+`flake.nix` and `.dagger/` (see below) are a **separate, not-yet-working path** meant for
+CI, not today's local workflow — don't reach for `nix develop` here.
+
+Requires [`go-task`](https://taskfile.dev) and [`distrobox`](https://distrobox.it/). All
+tasks: `task --list`.
+
+- `task install-tools` — creates the `flatpak-builder` distrobox, installs
+  `flatpak-builder`/`flatpak`/`git` in it via `dnf`, and installs the Flatpak runtimes
+  this manifest needs (KDE 6.10 platform/SDK, rust-stable SDK extension) via the host
+  `flatpak`.
 - `task generate-cargo-sources` — downloads `Cargo.lock` from the pinned Ladybird commit
   and regenerates `sources/cargo-sources.json`.
 - `task generate-manifest` — reassembles `org.ladybird.Ladybird.json` from
   `manifest-template.json` + `sources/*.json`.
 - `task update-sources` — the above two, in order.
-- `task build` — runs `flatpak-builder`. Currently fails once vcpkg tries to fetch ports
-  (see above).
-- `task run` — `flatpak run org.ladybird.Ladybird`.
+- `task build` — runs `flatpak-builder` inside the distrobox. Currently fails once vcpkg
+  tries to fetch ports (see above).
+- `task run` — `flatpak run org.ladybird.Ladybird` (host, no distrobox involved).
 - `task clean` — removes local build artifacts.
+
+## Dagger + Nix (for CI, not yet working)
+
+`dagger.json` and `.dagger/main.go` are a hand-written, **unrun** Dagger Go module — the
+local Dagger engine (a podman container on this dev machine) got stuck in an unkillable
+kernel `D`-state and no working engine was available to run `dagger init`/`dagger develop`
+against, which is what normally generates `go.mod`/`go.sum`/the `internal/dagger` SDK
+bindings this file imports. It won't compile as-is. The plan is to finish wiring it up in
+GitHub Actions (or once Dagger Cloud's hosted "Cloud Engines" are set up — `dagger login`
+plus `dagger --cloud` — as a way to sidestep needing any local container engine at all),
+rather than chase the local engine issue further right now.
+
+`main.go`'s `nixContainer()` helper is intended to run `flake.nix`'s devShell (which does
+include `flatpak-builder`, unlike the distrobox-vs-Nix split above — inside a fresh
+container, Nix's own sandboxing/build-user setup isn't fighting an immutable host OS the
+way it would locally) inside a Dagger pipeline, so `flake.nix` stays relevant once this is
+running in CI even though it's unused for local dev today.
 
 ## Next steps, in order
 

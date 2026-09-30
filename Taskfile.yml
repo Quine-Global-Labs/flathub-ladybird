@@ -5,13 +5,20 @@ vars:
   LADYBIRD_COMMIT: 618693e7173413d0a6e23d6449164170b1c7dae8
   RUNTIME_VERSION: "6.10"
   SCRATCH: .cache
+  DISTROBOX_NAME: flatpak-builder
+  # flatpak-builder itself has no Homebrew formula and needs deep system integration
+  # (ostree, bubblewrap, polkit) that doesn't fit a Nix devShell well on an
+  # immutable/atomic host either, so it runs from a Fedora distrobox instead. The
+  # distrobox shares this user's home dir, so it sees/writes the same
+  # ~/.local/share/flatpak install as the host `flatpak` command.
+  IN_BOX: distrobox enter {{.DISTROBOX_NAME}} --
 
 tasks:
   install-tools:
-    desc: Install the local tooling needed to work on this manifest (uv, flatpak-builder, runtimes)
+    desc: Create the flatpak-builder distrobox and install the Flatpak runtimes/SDK/extension this manifest needs
     cmds:
-      - command -v uv >/dev/null || brew install uv
-      - flatpak install -y --user flathub org.flatpak.Builder
+      - distrobox create --name {{.DISTROBOX_NAME}} --image fedora:latest --yes
+      - "{{.IN_BOX}} sudo dnf install -y flatpak-builder flatpak git"
       - flatpak install -y --user flathub org.kde.Platform//{{.RUNTIME_VERSION}} org.kde.Sdk//{{.RUNTIME_VERSION}}
       - flatpak install -y --user flathub org.freedesktop.Sdk.Extension.rust-stable//{{.RUNTIME_VERSION}}
 
@@ -24,7 +31,7 @@ tasks:
       - test -f {{.SCRATCH}}/Cargo.lock
 
   generate-cargo-sources:
-    desc: Regenerate sources/cargo-sources.json from the pinned Cargo.lock
+    desc: Regenerate sources/cargo-sources.json from the pinned Cargo.lock (uses uv, installed via brew)
     deps: [fetch-cargo-lock]
     cmds:
       - uv run tools/flatpak-cargo-generator.py {{.SCRATCH}}/Cargo.lock -o sources/cargo-sources.json
@@ -42,14 +49,15 @@ tasks:
 
   build:
     desc: >
-      Build the flatpak with flatpak-builder. Will currently fail once vcpkg
-      tries to fetch ports -- that part isn't vendored yet, see README.md.
+      Build the flatpak with flatpak-builder, run inside the flatpak-builder distrobox
+      (see install-tools). Will currently fail once vcpkg tries to fetch ports -- that
+      part isn't vendored yet, see README.md.
     deps: [generate-manifest]
     cmds:
-      - flatpak-builder --user --install --force-clean --ccache build {{.APP_ID}}.json
+      - "{{.IN_BOX}} flatpak-builder --user --install --force-clean --ccache build {{.APP_ID}}.json"
 
   run:
-    desc: Run the installed flatpak
+    desc: Run the installed flatpak (host flatpak sees it too, since the distrobox shares ~/.local/share/flatpak)
     cmds:
       - flatpak run {{.APP_ID}}
 
