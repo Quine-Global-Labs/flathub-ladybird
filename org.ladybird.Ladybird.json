@@ -1,0 +1,67 @@
+{
+    "id": "org.ladybird.Ladybird",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.10",
+    "sdk": "org.kde.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "ladybird",
+    "finish-args": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--device=dri",
+        "--talk-name=org.freedesktop.Notifications",
+        "--filesystem=xdg-download"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin",
+        "env": {
+            "CARGO_HOME": "/run/build/Ladybird/cargo"
+        }
+    },
+    "cleanup": [
+        "/include",
+        "/lib/cmake",
+        "/lib/pkgconfig",
+        "/share/doc",
+        "/share/man",
+        "*.la",
+        "*.a"
+    ],
+    "modules": [
+        {
+            "name": "Ladybird",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_INSTALL_PREFIX=/app",
+                "-DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake",
+                "-DVCPKG_INSTALLED_DIR=vcpkg_installed",
+                "-DBUILD_SHARED_LIBS=OFF",
+                "-DLADYBIRD_VCPKG_TYPE=distribution",
+                "-DENABLE_INSTALL_FREEDESKTOP_FILES=ON",
+                "-DENABLE_QT=ON"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/LadybirdBrowser/ladybird.git",
+                    "commit": "618693e7173413d0a6e23d6449164170b1c7dae8",
+                    "x-comment": "Ladybird has no tagged releases; this pins to master HEAD as of 2026-09-29. Re-pin periodically."
+                },
+                {
+                    "type": "git",
+                    "url": "https://github.com/microsoft/vcpkg.git",
+                    "dest": "vcpkg",
+                    "commit": "7f3781e19cc7d4e4882a4caec01668c6f7b5c163",
+                    "x-comment": "Matches builtin-baseline in Ladybird's vcpkg.json at the pinned commit above. Must be re-synced whenever the Ladybird git pin above moves."
+                }
+            ],
+            "x-comment": "UNRESOLVED: this module has no offline sources for (a) the ~40 vcpkg ports Ladybird depends on (Skia, ICU, FFmpeg, curl, Qt6, etc) or (b) its Rust dependencies (Cargo.lock at repo root, rust-toolchain.toml pins channel 1.98.0). Both vcpkg and cargo will try to hit the network during configure/build and this will fail in a real sandboxed (network-less) flatpak-builder run. See README.md for the vendoring plan for each. Do not submit to Flathub until this is resolved."
+        }
+    ]
+}
