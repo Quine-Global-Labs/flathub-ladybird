@@ -1,0 +1,49 @@
+name: Build Flatpak
+
+# UNTESTED as of the commit that added this file. The local Dagger engine on
+# the dev machine this was built on got stuck in an unkillable state, so this
+# workflow's first real run happens here in CI, not locally. See README.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Compiling ~69 vcpkg ports (including Skia) from scratch took about 21
+    # minutes on the dev machine this was worked out on; GitHub-hosted
+    # runners are typically slower, and Ladybird's own C++/Rust build is on
+    # top of that. Generous ceiling until a real run gives a better number.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Dagger CLI
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | BIN_DIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build flatpak bundle (Dagger)
+        run: dagger call build --src=. export --path=./org.ladybird.Ladybird.flatpak
+
+      - name: Upload flatpak bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: org.ladybird.Ladybird.flatpak
+          path: org.ladybird.Ladybird.flatpak
+          if-no-files-found: error
+
+      - name: Attach bundle to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: org.ladybird.Ladybird.flatpak

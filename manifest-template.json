@@ -21,7 +21,9 @@
         "append-path": "/usr/lib/sdk/rust-stable/bin",
         "env": {
             "CARGO_HOME": "/run/build/Ladybird/cargo",
-            "VCPKG_ROOT": "/run/build/Ladybird/vcpkg"
+            "VCPKG_ROOT": "/run/build/Ladybird/vcpkg",
+            "PIP_NO_INDEX": "1",
+            "PIP_FIND_LINKS": "/run/build/Ladybird/pip-vendor"
         }
     },
     "cleanup": [
@@ -100,18 +102,33 @@
                     "x-comment": "Same situation as libyuv above: Skia's other googlesource-fetched external."
                 },
                 {
+                    "type": "git",
+                    "url": "https://chromium.googlesource.com/chromium/src/third_party/zlib",
+                    "commit": "4028ebf8710ee39d2286cb0f847f9b95c59f84d8",
+                    "dest": "vcpkg-git-externals/angle-zlib",
+                    "x-comment": "Same situation as libyuv/piex above, but for the angle port (chromium's zlib fork, one of angle's own third_party deps) rather than skia."
+                },
+                {
                     "type": "shell",
                     "commands": [
                         "mkdir -p vcpkg/downloads",
                         "tar czf vcpkg/downloads/libyuv-d98915a654d3564e4802a0004add46221c4e4348.tar.gz -C vcpkg-git-externals/libyuv --exclude=.git .",
-                        "tar czf vcpkg/downloads/skia-bb217acdca1cc0c16b704669dd6f91a1b509c406.tar.gz -C vcpkg-git-externals/piex --exclude=.git ."
+                        "tar czf vcpkg/downloads/skia-bb217acdca1cc0c16b704669dd6f91a1b509c406.tar.gz -C vcpkg-git-externals/piex --exclude=.git .",
+                        "tar czf vcpkg/downloads/angle-4028ebf8710ee39d2286cb0f847f9b95c59f84d8.tar.gz -C vcpkg-git-externals/angle-zlib --exclude=.git ."
                     ],
-                    "x-comment": "Synthesizes the exact tarballs vcpkg's skia portfile expects to find already cached in downloads/, from the hash-pinned git checkouts above -- no network involved, so this is safe to run in the sandboxed build. UNVERIFIED against a full (non-download-only) vcpkg build: vcpkg doesn't hash-check these two specifically (no asset-cache/sha512 line for them in the install log), so content should be accepted regardless of exact tar layout, but that's inferred from log behavior, not confirmed by a successful full build yet."
+                    "x-comment": "Synthesizes the exact tarballs vcpkg's skia portfile expects to find already cached in downloads/, from the hash-pinned git checkouts above -- no network involved, so this is safe to run in the sandboxed build. Verified: a full (non-download-only) `vcpkg install` against these exact sources, outside the flatpak sandbox but with the sandbox's own VCPKG_ROOT/downloads/ layout, completed successfully for all 69 ports including skia, using tarballs produced this same way."
+                },
+                {
+                    "type": "file",
+                    "url": "https://files.pythonhosted.org/packages/a3/58/35da89ee790598a0700ea49b2a66594140f44dec458c07e8e3d4979137fc/ply-3.11-py2.py3-none-any.whl",
+                    "sha256": "096f9b8350b65ebd2fd1346b12452efe5b9607f7482813ffca50c22722a807ce",
+                    "dest": "pip-vendor",
+                    "x-comment": "The ONLY build-time (not source-fetch-time) network dependency found across all 69 vcpkg ports (confirmed by a full local `vcpkg install` run): the angle port's portfile does `pip install ply` inside a venv it creates itself. PIP_NO_INDEX + PIP_FIND_LINKS above (pointed at this dest) make that resolve offline instead. No version was pinned by the portfile itself; this is whatever PyPI currently serves as ply's latest (3.11) -- re-check if angle's portfile ever adds a version constraint."
                 },
                 "@@CARGO_SOURCES@@",
                 "@@VCPKG_SOURCES@@"
             ],
-            "x-comment": "UNRESOLVED: this module has no offline sources for the ~40 vcpkg ports Ladybird depends on (Skia, ICU, FFmpeg, curl, Qt6, etc) -- vcpkg's own tool binary IS now vendored (see the vcpkg-glibc file sources above), but installing any port still needs network. This will fail in a real sandboxed (network-less) flatpak-builder run. Rust deps ARE vendored (see sources/cargo-sources.json, regenerate via `task generate-cargo-sources`). See README.md for the vcpkg port-vendoring plan. Do not submit to Flathub until it's resolved."
+            "x-comment": "Offline vendoring for vcpkg is believed complete: a full local `vcpkg install` (not just --only-downloads) against the exact sources/config in this module succeeded for all 69 ports, including compiling skia, with the only build-time network need (angle's `pip install ply`) also vendored above. NOT YET verified end-to-end inside the actual flatpak-builder sandbox itself (only outside it, in a distrobox with real network, using the same VCPKG_ROOT/downloads layout) -- that's the next thing to confirm. Rust deps ARE vendored and manifest-verified (see sources/cargo-sources.json). See README.md for full details and what's still open (notably: -DENABLE_QT=ON doesn't appear to pull Qt into the resolved package set)."
         }
     ]
 }

@@ -41,7 +41,13 @@ import re
 import sys
 from pathlib import Path
 
-EXCLUDE_DIR_NAMES = {"tools", "git-tmp", "temp"}
+EXCLUDE_DIR_NAMES = {"tools", "git-tmp", "temp", "__pycache__"}
+
+# Build artifacts that land in downloads/ as a side effect of running some port's
+# build (e.g. ply, invoked by angle's pip-installed toolchain, caches its generated
+# parse table here because that happens to be the working directory) -- not fetched
+# from anywhere, so there's nothing to vendor; just don't flag them as unmatched.
+NOT_A_DOWNLOAD = {"parsetab.py"}
 
 # Kind 3a: ports vcpkg fetches via git clone + packages into downloads/<file> itself,
 # where the origin also serves a stable/reproducible archive-by-commit endpoint (GitHub
@@ -66,6 +72,7 @@ GIT_DERIVED = {
 GIT_SOURCE_HANDLED_ELSEWHERE = {
     "libyuv-d98915a654d3564e4802a0004add46221c4e4348.tar.gz",
     "skia-bb217acdca1cc0c16b704669dd6f91a1b509c406.tar.gz",
+    "angle-4028ebf8710ee39d2286cb0f847f9b95c59f84d8.tar.gz",
 }
 
 DOWNLOADING_ARROW_RE = re.compile(r"^Downloading (\S+) -> (\S+)$")
@@ -135,7 +142,7 @@ def main() -> None:
             continue
         if entry.name.endswith(".part"):
             continue
-        if entry.name in GIT_SOURCE_HANDLED_ELSEWHERE:
+        if entry.name in GIT_SOURCE_HANDLED_ELSEWHERE or entry.name in NOT_A_DOWNLOAD:
             continue
 
         if entry.name in GIT_DERIVED:

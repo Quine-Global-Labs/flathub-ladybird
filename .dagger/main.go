@@ -1,16 +1,15 @@
 // Package main is the Dagger module for building the org.ladybird.Ladybird
 // Flatpak.
 //
-// NOT YET RUN. `dagger init` was hand-written here instead of generated,
-// because the local Dagger engine (a podman container) got stuck in an
-// unkillable D-state on this dev machine and no working engine was available
-// to run `dagger develop` against. That command still needs to be run once
-// against a healthy engine (locally once the podman issue is resolved, or in
-// CI) to generate go.mod/go.sum and the internal/dagger SDK bindings this
-// file imports -- until then this package doesn't build. The intent is to
-// finish wiring this up via GitHub Actions rather than chase the local
-// engine issue further. See README.md for the manifest-side TODOs (vcpkg
-// vendoring) this Build function will hit once it actually runs.
+// NOT YET RUN LOCALLY. `dagger init`/`dagger develop` was hand-written here
+// instead of generated, because the local Dagger engine (a podman container)
+// got stuck in an unkillable D-state on this dev machine and no working
+// engine was available. `dagger develop` still needs to run once against a
+// healthy engine to generate go.mod/go.sum/internal/dagger -- CI is that
+// healthy engine (a fresh one every run), so GitHub Actions is this module's
+// first real test, not a local one. See README.md for the manifest-side
+// research (vcpkg vendoring, the freedesktop-vs-KDE runtime call, etc.) this
+// Build function's actual flatpak-builder run is built on.
 package main
 
 import (
@@ -19,27 +18,46 @@ import (
 	"dagger/flathub-ladybird/internal/dagger"
 )
 
+const appID = "org.ladybird.Ladybird"
+
 type FlathubLadybird struct{}
 
 // Build runs flatpak-builder against org.ladybird.Ladybird.json inside a
-// Nix-provisioned container (using this repo's flake.nix for
-// flatpak-builder/uv/etc.) and returns the resulting flatpak-builder repo
-// directory.
+// Nix-provisioned container (this repo's flake.nix -- flatpak-builder plus
+// the native toolchain vcpkg's ~69 ports needed when this was worked out by
+// hand in a distrobox: gcc, perl, nasm, autotools, ncurses, etc), producing
+// an ostree repo, then bundles that into a single distributable .flatpak
+// file via `flatpak build-bundle`.
 //
-// Expected to fail once vcpkg tries to fetch ports mid-build until that's
-// vendored (see README.md) -- kept here so CI exercises the real pipeline as
-// soon as it's resolved, instead of being wired up after the fact.
+// --disable-rofiles-fuse is always passed because the FUSE mount
+// flatpak-builder's rofiles overlay normally wants isn't guaranteed
+// available inside a container (confirmed necessary in the distrobox this
+// was developed against; harmless where FUSE does work, since it just
+// switches to a hardlink/copy strategy instead).
+//
+// vcpkg's own binary cache and ccache are both mounted as Dagger cache
+// volumes so a second run of this function doesn't recompile the ~69 vcpkg
+// ports (or Ladybird itself) from scratch -- only the first run per cache
+// generation pays the full (likely multi-hour) cost.
 func (m *FlathubLadybird) Build(ctx context.Context,
 	// +defaultPath="."
 	src *dagger.Directory,
-) *dagger.Directory {
+) *dagger.File {
+	bundleName := appID + ".flatpak"
+
 	return nixContainer(src).
+		WithMountedCache("/repo/Build/caches/vcpkg-binary-cache", dag.CacheVolume("flathub-ladybird-vcpkg-binary-cache")).
+		WithMountedCache("/root/.cache/ccache", dag.CacheVolume("flathub-ladybird-ccache")).
 		WithExec([]string{
 			"nix", "develop", "--command",
-			"flatpak-builder", "--force-clean", "--ccache",
-			"--repo=repo", "build", "org.ladybird.Ladybird.json",
+			"flatpak-builder", "--disable-rofiles-fuse", "--force-clean", "--ccache",
+			"--repo=repo", "build", appID + ".json",
 		}).
-		Directory("/repo/repo")
+		WithExec([]string{
+			"nix", "develop", "--command",
+			"flatpak", "build-bundle", "repo", bundleName, appID,
+		}).
+		File(bundleName)
 }
 
 // GenerateCargoSources regenerates sources/cargo-sources.json from the

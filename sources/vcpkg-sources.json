@@ -8,6 +8,13 @@
     },
     {
         "type": "file",
+        "url": "https://github.com/WebKit/WebKit/raw/0742522b24152262b04913242cb0b3c48de92ba0/Source/cmake/DetectSSE2.cmake",
+        "sha256": "6dda18967c5c5eee67e8dfd10d2303dc507b0a50875e6530cb93e7194da7858e",
+        "dest": "vcpkg/downloads",
+        "dest-filename": "DetectSSE2.cmake"
+    },
+    {
+        "type": "file",
         "url": "https://github.com/GNOME/libxml2/archive/v2.15.3.tar.gz",
         "sha256": "5c6060277173270356c3f1c321a640ab629bdabc5e5ba9095b99e00759ba0c39",
         "dest": "vcpkg/downloads",
@@ -40,6 +47,20 @@
         "sha256": "6d1bb65e49520344cc0a48af3dc02e993781efff14c7ebdcb8ae9fa23ddf7e83",
         "dest": "vcpkg/downloads",
         "dest-filename": "KhronosGroup-Vulkan-Headers-vulkan-sdk-1.4.350.1.tar.gz"
+    },
+    {
+        "type": "file",
+        "url": "https://github.com/WebKit/WebKit/raw/0742522b24152262b04913242cb0b3c48de92ba0/Source/cmake/WebKitCompilerFlags.cmake",
+        "sha256": "1012604dbf0014071c5f12f2a0a6974eb6e313645993d6ea52ff7df429245dbe",
+        "dest": "vcpkg/downloads",
+        "dest-filename": "WebKitCompilerFlags.cmake"
+    },
+    {
+        "type": "file",
+        "url": "https://github.com/WebKit/WebKit/raw/0742522b24152262b04913242cb0b3c48de92ba0/Source/cmake/WebKitMacros.cmake",
+        "sha256": "351d98747698b1b3defe5407de07136c37acdbf82a3017acbfc2f18f324cd594",
+        "dest": "vcpkg/downloads",
+        "dest-filename": "WebKitMacros.cmake"
     },
     {
         "type": "file",
@@ -208,6 +229,13 @@
         "sha256": "3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0",
         "dest": "vcpkg/downloads",
         "dest-filename": "icu4c-78.3-sources.tgz"
+    },
+    {
+        "type": "file",
+        "url": "https://github.com/WebKit/WebKit/raw/0742522b24152262b04913242cb0b3c48de92ba0/Source/ThirdParty/ANGLE/include/CMakeLists.txt",
+        "sha256": "c7855853548440805364e501c7d1522d60061fd8c650158e3e33c3b4cab54477",
+        "dest": "vcpkg/downloads",
+        "dest-filename": "include_CMakeLists.txt"
     },
     {
         "type": "file",
