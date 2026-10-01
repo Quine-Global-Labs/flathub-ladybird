@@ -1,0 +1,116 @@
+diff --git a/Libraries/LibGfx/Font/TypefaceSkia.cpp b/Libraries/LibGfx/Font/TypefaceSkia.cpp
+index c09aa5d9d4..6ea1a560da 100644
+--- a/Libraries/LibGfx/Font/TypefaceSkia.cpp
++++ b/Libraries/LibGfx/Font/TypefaceSkia.cpp
+@@ -11,6 +11,7 @@
+ #include <AK/LsanSuppressions.h>
+ #include <AK/NeverDestroyed.h>
+ #include <LibGfx/Font/FontDatabase.h>
++#include <LibGfx/Font/GlobalFontConfig.h>
+ #include <LibGfx/Font/TypefaceSkia.h>
+ #include <LibIPC/Decoder.h>
+ #include <LibIPC/Encoder.h>
+@@ -106,7 +107,7 @@ static SkFontMgr& font_manager()
+             font_manager = SkFontMgr_New_DirectWrite();
+ #else
+         if (!font_manager) {
+-            font_manager = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
++            font_manager = SkFontMgr_New_FontConfig(FcConfigReference(Gfx::GlobalFontConfig::the().get()), SkFontScanner_Make_FreeType());
+         }
+ #endif
+     }
+diff --git a/Services/Compositor/SandboxLinux.cpp b/Services/Compositor/SandboxLinux.cpp
+index 10224685e7..2afea106af 100644
+--- a/Services/Compositor/SandboxLinux.cpp
++++ b/Services/Compositor/SandboxLinux.cpp
+@@ -15,6 +15,7 @@
+ #include <LibCore/File.h>
+ #include <LibCore/StandardPaths.h>
+ #include <LibCore/System.h>
++#include <LibGfx/Font/GlobalFontConfig.h>
+ #include <LibSandbox/Sandbox.h>
+ #include <LibSandbox/Seccomp.h>
+ #include <link.h>
+@@ -155,6 +156,9 @@ ErrorOr<void> restrict_filesystem(StringView resource_root)
+     TRY(Sandbox::install_no_new_privileges());
+     TRY(Sandbox::configure_runtime());
+ 
++    // Fontconfig configuration files must be read before restricting filesystem access.
++    Gfx::GlobalFontConfig::the();
++
+     Vector<Sandbox::LandlockPath> paths;
+     TRY(Sandbox::add_landlock_path_if_exists(paths, TRY(String::formatted("{}/fonts", resource_root)), Sandbox::LandlockPath::Access::ReadOnly));
+     TRY(Sandbox::add_landlock_path_if_exists(paths, "/lib"sv, Sandbox::LandlockPath::Access::ReadOnly));
+diff --git a/Services/RendererSandboxLinux.cpp b/Services/RendererSandboxLinux.cpp
+index 3de8691b8f..e9d0cdab61 100644
+--- a/Services/RendererSandboxLinux.cpp
++++ b/Services/RendererSandboxLinux.cpp
+@@ -8,6 +8,7 @@
+ #include <LibCore/Directory.h>
+ #include <LibCore/StandardPaths.h>
+ #include <LibCore/System.h>
++#include <LibGfx/Font/GlobalFontConfig.h>
+ #include <LibSandbox/Sandbox.h>
+ #include <LibSandbox/Seccomp.h>
+ #include <LibWebView/Utilities.h>
+@@ -20,6 +21,9 @@ ErrorOr<void> apply_sandbox(StringView, Optional<StringView>, AudioAccess audio_
+     TRY(Sandbox::install_no_new_privileges());
+     TRY(Sandbox::configure_runtime());
+ 
++    // Fontconfig configuration files must be read before restricting filesystem access.
++    Gfx::GlobalFontConfig::the();
++
+     auto executable_path = TRY(Core::System::current_executable_path());
+     auto build_root = LexicalPath::dirname(LexicalPath::dirname(executable_path));
+ 
+diff --git a/Services/WebContent/main.cpp b/Services/WebContent/main.cpp
+index f652d352e9..a8900b1593 100644
+--- a/Services/WebContent/main.cpp
++++ b/Services/WebContent/main.cpp
+@@ -126,12 +126,6 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
+     VERIFY(SUCCEEDED(hr));
+     ScopeGuard uninitialize_com = []() { CoUninitialize(); };
+ #endif
+-    // SDL is used for the Gamepad API.
+-    if (!SDL_Init(SDL_INIT_GAMEPAD)) {
+-        dbgln("Failed to initialize SDL3: {}", SDL_GetError());
+-        return -1;
+-    }
+-
+     auto& event_loop = Core::EventLoop::initialize_for_current_thread();
+ 
+     WebView::platform_init();
+@@ -221,8 +215,6 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
+             VERIFY_NOT_REACHED();
+     }
+ 
+-    OPENSSL_TRY(OSSL_set_max_threads(nullptr, Core::System::hardware_concurrency()));
+-
+     Web::HTML::Window::set_enable_test_mode(enable_test_mode);
+     Web::HTML::Window::set_internals_object_exposed(expose_internals_object);
+     Web::HTML::WindowOrWorkerGlobalScopeMixin::set_experimental_interfaces_exposed(expose_experimental_interfaces);
+@@ -244,6 +236,24 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
+     if (!disable_sandbox)
+         TRY(RendererSandbox::apply_sandbox(mach_server_name, cache_path, RendererSandbox::AudioAccess::Yes));
+ 
++    // NB: Both of these start worker threads (OpenSSL's thread pool, and SDL's libusb-based gamepad hotplug
++    //     detection thread), and Landlock does not confine a thread that already runs -- so both have to happen
++    //     after the sandbox is applied (see Compositor's restrict_filesystem(), which moved GPU driver init for the
++    //     same reason). SDL_Init failing (e.g. because Landlock didn't allow some USB/input device path it wants)
++    //     is treated as "no gamepad support" rather than fatal -- unlike the GPU backend, nothing else depends on it.
++    OPENSSL_TRY(OSSL_set_max_threads(nullptr, Core::System::hardware_concurrency()));
++
++    // NB: SDL's HIDAPI backend starts a libusb event-handling thread, which then needs seccomp syscalls (e.g.
++    //     sendmmsg on a netlink socket) that WebContent's policy doesn't grant. SDL_HINT_HIDAPI_LIBUSB=0 did NOT
++    //     avoid this in testing (hid_init() still calls libusb_init() regardless -- not fully root-caused). Rather
++    //     than widen the seccomp policy for a feature most pages never use, skip gamepad support entirely while
++    //     sandboxed; --disable-sandbox still gets it. Revisit if/when the actual libusb call site is found and a
++    //     narrower seccomp allowance (not blanket allow_network()) can be scoped to just what it needs.
++    if (disable_sandbox) {
++        if (!SDL_Init(SDL_INIT_GAMEPAD))
++            dbgln("Failed to initialize SDL3, gamepad support will be unavailable: {}", SDL_GetError());
++    }
++
+ #if defined(AK_OS_MACOS)
+     auto browser_port = TRY(Core::MachPort::look_up_from_bootstrap_server(ByteString { mach_server_name }));
+     auto transport_ports = TRY(IPC::bootstrap_transport_from_server_port(browser_port));

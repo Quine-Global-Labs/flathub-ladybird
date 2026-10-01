@@ -35,13 +35,15 @@ ostree/bubblewrap/polkit integration that doesn't suit an immutable host directl
 ```
 task install-tools   # once: creates the distrobox, installs flatpak-builder,
                       # installs the org.kde.Platform/Sdk 6.10 runtime this manifest uses
-task build            # clones LadybirdBrowser/ladybird into ./ladybird if needed, then
-                      # builds Meta/CMake/flatpak/org.ladybird.Ladybird.json
+task build            # clones LadybirdBrowser/ladybird into ./ladybird if needed (applying
+                      # patches/ -- see "Running it" below), then builds
+                      # Meta/CMake/flatpak/org.ladybird.Ladybird.json
 task run              # flatpak run org.ladybird.Ladybird
 ```
 
-`task update` pulls the latest `ladybird/` checkout before a rebuild. `task clean`
-removes local build artifacts (not the checkout itself).
+`task update` pulls the latest `ladybird/` checkout and reapplies `patches/` (`git
+reset --hard` wipes them, same as a fresh clone would). `task clean` removes local build
+artifacts (not the checkout itself).
 
 **Build confirmed working end to end on 2026-09-30**: `task build` compiles every
 dependency module (angle, skia, openssl, ffmpeg, etc.) and the main `Ladybird` module
@@ -62,11 +64,16 @@ itself, and installs cleanly. Two build-time things worth knowing if you hit the
   wasn't needed here — evidently distrobox containers already have sufficient namespace
   permissions by default on this host.
 
-## Running it: two live, unfixed upstream sandbox bugs
+## Running it: three sandbox bugs found, fixed, and verified
 
-The built app installs fine but currently **will not run with Linux sandboxing enabled**
-at today's pinned master commit (`124f0c9871`) — both bugs are in Ladybird's own C++
-sandbox code, not in packaging:
+At today's pinned master commit (`124f0c9871`), the app **would not run at all** with
+Linux sandboxing enabled — found three separate bugs doing so, all in Ladybird's own C++
+sandbox code, not in packaging. All three are now fixed by `patches/sandbox-fixes.patch`
+(applied automatically by `task clone`/`task update`/`task apply-patches` — **not**
+committed to Ladybird's own repo, since none of this is upstreamed yet) and **confirmed
+working**: a real `flatpak run org.ladybird.Ladybird` (no `--disable-sandbox`, no other
+flags) starts `RequestServer`, `Compositor`, and two `WebContent` processes, all stay up,
+and pages load with no crash loop.
 
 1. **Fontconfig loads after the sandbox restricts filesystem access, so it fails** —
    tracked upstream as
@@ -76,47 +83,46 @@ sandbox code, not in packaging:
    The issue includes an unmerged, untested-by-its-author patch (force fontconfig to load
    its config before the Landlock/seccomp restrictions go up, then hand Skia that already-
    loaded `FcConfig*` instead of letting it load a fresh one from inside the sandbox).
-   **Applied locally** (uncommitted, working-tree-only changes in `ladybird/` — the
-   manifest's `Ladybird` module sources directly from the working directory, so a rebuild
-   picks it up automatically) to `Services/Compositor/SandboxLinux.cpp`,
-   `Services/RendererSandboxLinux.cpp`, and `Libraries/LibGfx/Font/TypefaceSkia.cpp`,
-   adapted to this checkout's current `Gfx::GlobalFontConfig` singleton (a `get()` accessor
-   that didn't exist when the issue's patch was written) rather than applied as a literal
-   patch file. **Confirmed fixed**: the `Fontconfig error: Cannot load default config file`
-   line is gone from a rebuild with this change, verified against the exact same manifest
-   that reproduced it.
+   Adapted into the patch here (`Services/Compositor/SandboxLinux.cpp`,
+   `Services/RendererSandboxLinux.cpp`, `Libraries/LibGfx/Font/TypefaceSkia.cpp`) to this
+   checkout's current `Gfx::GlobalFontConfig` singleton (a `get()` accessor that didn't
+   exist when the issue's patch was written). Confirmed fixed in isolation: the
+   `Fontconfig error: Cannot load default config file` line disappeared from a rebuild with
+   just this change, before the other two below were found.
 
-2. **A second, separate, not-yet-reported bug**: even with the fontconfig fix applied,
-   `WebContent` crash-loops immediately on startup with `Runtime error: Landlock must be
-   applied before the process starts a second thread` — repeating every ~100ms, "Last page
-   loaded: about:newtab" each time. This was present from the very first run, *before* the
-   fontconfig patch, so it isn't caused by that fix; searched the issue tracker
-   exhaustively and found no existing report. **Confirmed isolated**: running with
-   `flatpak run org.ladybird.Ladybird --disable-sandbox` (propagates to every helper
-   process — `Services/WebContent/main.cpp`'s `--disable-sandbox` flag, plumbed through
-   `LibWebView/HelperProcess.cpp`) eliminates the crash loop entirely — `RequestServer`,
-   `Compositor`, and two `WebContent` processes all start and stay up. This isolates the
-   bug cleanly to Ladybird's own Landlock-application code path (a thread getting created
-   somewhere between `Sandbox::install_no_new_privileges()`/`configure_runtime()` and the
-   actual Landlock restrict syscall, for reasons not yet root-caused), not to Flatpak, not
-   to this repo's build, and not to the fontconfig fix. Worth filing upstream.
+2. **A second, separate, not-yet-reported bug**: even with the fontconfig fix, `WebContent`
+   crash-looped immediately with `Runtime error: Landlock must be applied before the
+   process starts a second thread` — a check that, per `git log`, didn't exist before
+   commit `3fea952607` (2026-09-19, 11 days before our pin), added as a safety net while
+   fixing an *analogous* bug in `Compositor` (GPU driver threads starting before Landlock
+   was applied). That fix reordered `Compositor`'s startup; `WebContent` apparently has the
+   same ordering problem and was never updated to match, so it now hits the newly-strict
+   check instead of silently running with the same gap `Compositor` had. Root-caused by
+   adding temporary `/proc/self/task` diagnostics: the second thread is OpenSSL's thread
+   pool (`OSSL_set_max_threads`, for its thread-pool provider) *and* SDL's gamepad hotplug
+   thread (`SDL_Init(SDL_INIT_GAMEPAD)`), both called before the sandbox in
+   `Services/WebContent/main.cpp`. Fixed the same way the precedent did: moved both to
+   after `RendererSandbox::apply_sandbox()`.
 
-`task run` currently needs `--disable-sandbox` appended to actually work:
+3. **Moving SDL's init that late surfaced a third, related issue**: its HIDAPI/libusb
+   backend starts its own event thread, which then hits a seccomp violation
+   (`disallowed syscall unknown (294)` — `sendmmsg`, used on the netlink socket libusb
+   opens for device hotplug) that `WebContent`'s seccomp policy doesn't grant. Tried
+   `SDL_HINT_HIDAPI_LIBUSB=0` (meant to make HIDAPI prefer the udev/hidraw backend instead
+   of libusb) — did **not** avoid it in testing (`hid_init()` still calls `libusb_init()`
+   regardless; not fully root-caused why). Rather than widen the seccomp policy for a
+   feature most pages never use (and risk over-granting — `LibSandbox`'s existing
+   `allow_network()` that provides `sendmmsg` is a much broader grant than this narrow case
+   needs), **the patch just skips gamepad initialization entirely while sandboxed**
+   (`--disable-sandbox` still gets it). A real, known tradeoff, not a hidden one: the
+   Gamepad Web API won't work in the sandboxed build until someone scopes a properly
+   narrow seccomp allowance for whatever libusb's event thread actually needs, or finds why
+   the HIDAPI hint didn't take.
 
-```
-flatpak run org.ladybird.Ladybird --disable-sandbox
-```
-
-This is a real reduction in the security boundary Ladybird's own sandbox is meant to
-provide (it's still inside the outer Flatpak sandbox, which is unaffected) — fine for
-local testing, not something to treat as a permanent fix. If a leftover session from a
-crashed run leaves the browser refusing to start at all with
+If a leftover session from a crashed run leaves the browser refusing to start at all with
 `Runtime error: connect: Connection refused (errno=111)`, a stale single-instance
-lock/socket is why — clear it and relaunch:
-
-```
-rm -f /run/user/$(id -u)/.flatpak/org.ladybird.Ladybird/xdg-run/Ladybird/Profiles/default/{*.pid,*.socket,*.lock}
-```
+lock/socket is why (hit repeatedly while testing, mostly from `timeout`-killing a test
+run non-gracefully) — `task clean-runtime` removes it.
 
 ## Flathub submission
 

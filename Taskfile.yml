@@ -23,18 +23,28 @@ tasks:
       - flatpak install -y --user flathub org.kde.Platform//{{.RUNTIME_VERSION}} org.kde.Sdk//{{.RUNTIME_VERSION}}
 
   clone:
-    desc: Clone (or update) LadybirdBrowser/ladybird into ./ladybird
+    desc: Clone LadybirdBrowser/ladybird into ./ladybird and apply patches/ (no-op if already cloned)
     status:
       - test -d {{.LADYBIRD_DIR}}/.git
     cmds:
       - git clone --depth 1 https://github.com/LadybirdBrowser/ladybird.git {{.LADYBIRD_DIR}}
+      - task: apply-patches
 
   update:
-    desc: Pull the latest ladybird master into ./ladybird
+    desc: Pull the latest ladybird master into ./ladybird and reapply patches/
     dir: "{{.LADYBIRD_DIR}}"
     cmds:
       - git fetch --depth 1 origin master
       - git reset --hard origin/master
+      - task: apply-patches
+
+  apply-patches:
+    desc: >
+      Apply patches/*.patch on top of the ladybird checkout. These aren't upstreamed yet
+      (see README.md) -- git reset/clone wipes them, so clone/update always reapply.
+    dir: "{{.LADYBIRD_DIR}}"
+    cmds:
+      - git apply ../patches/sandbox-fixes.patch
 
   build:
     desc: Build upstream's flatpak manifest with flatpak-builder, run inside the flatpak-builder distrobox
@@ -45,11 +55,12 @@ tasks:
   run:
     desc: >
       Run the installed flatpak (host flatpak sees it too, since the distrobox shares
-      ~/.local/share/flatpak). --disable-sandbox works around a live, unreported upstream
-      Landlock crash -- see README.md. If a crashed session left a stale single-instance
-      lock, this will fail with "connect: Connection refused"; run `task clean-runtime`.
+      ~/.local/share/flatpak). Runs fully sandboxed -- see README.md for the three sandbox
+      bugs patches/ fixes to make that possible. If a crashed session left a stale
+      single-instance lock, this will fail with "connect: Connection refused"; run
+      `task clean-runtime`.
     cmds:
-      - flatpak run {{.APP_ID}} --disable-sandbox
+      - flatpak run {{.APP_ID}}
 
   clean-runtime:
     desc: Remove a stale single-instance lock/socket left by a crashed session
