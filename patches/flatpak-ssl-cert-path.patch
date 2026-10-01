@@ -1,0 +1,14 @@
+diff --git a/Meta/CMake/flatpak/org.ladybird.Ladybird.json b/Meta/CMake/flatpak/org.ladybird.Ladybird.json
+index 724d6eae93..89bc4017f0 100644
+--- a/Meta/CMake/flatpak/org.ladybird.Ladybird.json
++++ b/Meta/CMake/flatpak/org.ladybird.Ladybird.json
+@@ -16,7 +16,8 @@
+     "--socket=wayland",
+     "--socket=fallback-x11",
+     "--socket=pulseaudio",
+-    "--socket=session-bus"
++    "--socket=session-bus",
++    "--env=SSL_CERT_FILE=/etc/ssl/cert.pem"
+   ],
+   "cleanup": [
+     "/sbin",

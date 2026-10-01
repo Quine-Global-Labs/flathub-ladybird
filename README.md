@@ -124,6 +124,25 @@ If a leftover session from a crashed run leaves the browser refusing to start at
 lock/socket is why (hit repeatedly while testing, mostly from `timeout`-killing a test
 run non-gracefully) — `task clean-runtime` removes it.
 
+## Fourth bug: every HTTPS load failed with "SSL verification failed"
+
+Once the sandbox bugs above were fixed and the browser actually ran, every single HTTPS
+page failed with `Load failed: Request finished with error: SSL verification failed` —
+reproduced even with `--disable-sandbox`, so not a sandboxing issue at all. Root cause:
+the manifest's `openssl` module configures `--openssldir=/app/ssl`, and nothing in the
+manifest ever populates `/app/ssl/certs` with any CA certificates — confirmed empty after
+a build. `Libraries/LibTLS/TLSv12.cpp` falls back to `SSL_CTX_set_default_verify_paths()`
+whenever no app-level custom certificate is set (the normal case), which resolves against
+that empty compiled-in default, so every chain fails to verify. The `org.kde.Platform`
+runtime itself does provide a real, current CA bundle at `/etc/ssl/cert.pem` (confirmed
+valid PEM content, readable from inside the sandbox) — OpenSSL's default-path logic checks
+the `SSL_CERT_FILE`/`SSL_CERT_DIR` environment variables before falling back to its
+compiled-in paths, so pointing it at the runtime's bundle is a one-line fix with no C++
+changes needed: `patches/flatpak-ssl-cert-path.patch` adds
+`--env=SSL_CERT_FILE=/etc/ssl/cert.pem` to the manifest's `finish-args`. Confirmed fixed
+with `--headless=text`: `https://example.com`, `https://news.ycombinator.com`, and
+`https://www.google.com` all now fetch and render real page content instead of erroring.
+
 ## Flathub submission
 
 Not yet submitted anywhere findable (checked `flathub/flathub` and the `flathub` org for
